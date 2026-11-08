@@ -1,6 +1,5 @@
-package com.example.api1_eliasescalante_pm.ui.theme
+package com.example.api1_eliasescalante_pm.ui.ui
 
-import android.app.Activity
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme

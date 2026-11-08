@@ -1,4 +1,4 @@
-package com.example.api1_eliasescalante_pm.ui.theme
+package com.example.api1_eliasescalante_pm.ui.ui
 
 import androidx.compose.ui.graphics.Color
 
