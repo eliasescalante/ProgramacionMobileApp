@@ -1,0 +1,73 @@
+# Configuración del servicio remoto
+
+La aplicación usa Retrofit + OkHttp y una URL base configurable. **No hay
+secretos ni tokens en el código ni en el repositorio.**
+
+## Opción 1: `local.properties` (recomendada para desarrollo)
+
+Copiá la clave de este archivo al `local.properties` de la raíz del proyecto
+(ese archivo no se versiona porque contiene la ruta del SDK):
+
+```properties
+REMOTE_BASE_URL=https://jsonplaceholder.typicode.com/
+```
+
+`local.properties` ya existe en Android Studio por la clave `sdk.dir`; agregá
+`REMOTE_BASE_URL` en una línea nueva.
+
+## Opción 2: propiedad de Gradle
+
+```powershell
+.\gradlew.bat :app:assembleDebug -PREMOTE_BASE_URL=https://mi-backend.example.com/api/
+```
+
+La prioridad es: `-PREMOTE_BASE_URL` > `local.properties` > valor por defecto
+(`https://jsonplaceholder.typicode.com/`).
+
+La URL debe terminar en `/`; si no lo hace, `RemoteServiceFactory` la normaliza.
+
+## Contrato esperado
+
+La app usa por defecto JSONPlaceholder (`/posts`), un servicio REST simulado y
+público. Para un backend propio, el contrato mínimo es:
+
+| Método | Ruta | Descripción |
+| --- | --- | --- |
+| `GET` | `posts?_limit=50` | Lista de recordatorios remotos |
+| `POST` | `posts` | Crea un recordatorio |
+| `PUT` | `posts/{id}` | Actualiza un recordatorio |
+| `DELETE` | `posts/{id}` | Elimina un recordatorio |
+
+Campos de respuesta reconocidos (todos opcionales salvo `id`, `title`):
+
+```json
+{
+  "id": 1,
+  "title": "Pagar el alquiler",
+  "body": "Descripción + bloque [recordatorio] con metadatos",
+  "clientId": "uuid-local-estable",
+  "description": "Antes del día 10",
+  "category": "PERSONAL",
+  "priority": "HIGH",
+  "status": "PENDING",
+  "dueDate": 1700000000000,
+  "location": "Banco central",
+  "updatedAt": 1700000000000
+}
+```
+
+Si el backend no devuelve los campos extendidos, la app los recupera del bloque
+de metadatos que escribe dentro de `body`. Los registros remotos sin `clientId`
+se ignoran para no importar datos ajenos.
+
+## JSONPlaceholder
+
+Es un servicio de demostración: no persiste los POST de forma consultable y
+devuelve el mismo `id` (101) para cada creación. Por eso:
+
+- La identidad estable es el `clientId` local (UUID), no el `remoteId`.
+- El índice de `remoteId` en Room no es único.
+- La app no depende de volver a leer lo creado para marcarlo como sincronizado.
+
+Para producción se recomienda un backend real que respete `clientId` y devuelva
+identificadores únicos.
