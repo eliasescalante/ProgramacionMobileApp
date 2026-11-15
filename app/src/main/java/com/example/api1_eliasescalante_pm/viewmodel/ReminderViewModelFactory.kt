@@ -2,10 +2,12 @@ package com.example.api1_eliasescalante_pm.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import com.example.api1_eliasescalante_pm.data.repository.AuthRepository
 import com.example.api1_eliasescalante_pm.data.repository.ReminderRepository
 
 class ReminderViewModelFactory(
     private val repository: ReminderRepository,
+    private val authRepository: AuthRepository,
     private val reminderId: String? = null
 ) : ViewModelProvider.Factory {
 
@@ -26,7 +28,7 @@ class ReminderViewModelFactory(
             }
 
             modelClass.isAssignableFrom(ReminderSettingsViewModel::class.java) ->
-                ReminderSettingsViewModel(repository) as T
+                ReminderSettingsViewModel(repository, authRepository) as T
 
             else -> throw IllegalArgumentException(
                 "ViewModel desconocido: ${modelClass.name}"

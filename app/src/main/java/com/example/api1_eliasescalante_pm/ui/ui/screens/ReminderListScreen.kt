@@ -50,7 +50,10 @@ fun ReminderListScreen(
     onOpenSettings: () -> Unit
 ) {
     val viewModel: ReminderListViewModel = viewModel(
-        factory = ReminderViewModelFactory(AppContainer.reminderRepository)
+        factory = ReminderViewModelFactory(
+            repository = AppContainer.reminderRepository,
+            authRepository = AppContainer.authRepository
+        )
     )
 
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()

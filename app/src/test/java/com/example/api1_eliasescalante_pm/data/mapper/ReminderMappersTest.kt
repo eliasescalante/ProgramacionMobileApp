@@ -1,7 +1,9 @@
 package com.example.api1_eliasescalante_pm.data.mapper
 
+import com.example.api1_eliasescalante_pm.data.cloud.CloudReminder
+import com.example.api1_eliasescalante_pm.data.cloud.toCloudReminderOrNull
+import com.example.api1_eliasescalante_pm.data.cloud.toDocument
 import com.example.api1_eliasescalante_pm.data.local.ReminderEntity
-import com.example.api1_eliasescalante_pm.data.remote.dto.RemoteReminderDto
 import com.example.api1_eliasescalante_pm.domain.model.Reminder
 import com.example.api1_eliasescalante_pm.domain.model.ReminderCategory
 import com.example.api1_eliasescalante_pm.domain.model.ReminderPriority
@@ -12,11 +14,15 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+/**
+ * Pruebas de los mapeos Room <-> Dominio y Dominio <-> Firestore.
+ * No requieren Android ni credenciales de Firebase.
+ */
 class ReminderMappersTest {
 
     private val reminder = Reminder(
-        id = "local-client-id",
-        remoteId = 42L,
+        id = "550e8400-e29b-41d4-a716-446655440000",
+        ownerUid = "uid-cuenta-a",
         title = "Pagar el alquiler",
         description = "Antes del día 10",
         category = ReminderCategory.PERSONAL,
@@ -30,12 +36,17 @@ class ReminderMappersTest {
         updatedAt = 200L
     )
 
+    // -----------------------------------------------------------------------
+    // Room <-> Dominio
+    // -----------------------------------------------------------------------
+
     @Test
     fun `entity to domain preserves every field`() {
         val entity = reminder.toEntity()
         val restored = entity.toDomain()
 
         assertEquals(reminder, restored)
+        assertEquals("uid-cuenta-a", entity.ownerUid)
     }
 
     @Test
@@ -52,6 +63,7 @@ class ReminderMappersTest {
     fun `unknown stored values fall back to safe defaults`() {
         val entity = ReminderEntity(
             id = "id",
+            ownerUid = "uid",
             title = "Título",
             category = "NO_EXISTE",
             priority = "NO_EXISTE",
@@ -69,59 +81,114 @@ class ReminderMappersTest {
         assertEquals(SyncState.PENDING, domain.syncState)
     }
 
-    @Test
-    fun `remote body roundtrip keeps description and metadata`() {
-        val body = encodeRemoteBody(reminder)
-        val metadata = parseRemoteMetadata(body)
+    // -----------------------------------------------------------------------
+    // Dominio -> Firestore
+    // -----------------------------------------------------------------------
 
-        assertTrue(body.startsWith("Antes del día 10"))
-        assertEquals("local-client-id", metadata["clientId"])
-        assertEquals("PERSONAL", metadata["category"])
-        assertEquals("HIGH", metadata["priority"])
-        assertEquals("IN_PROGRESS", metadata["status"])
-        assertEquals("1700000000000", metadata["dueDate"])
-        assertEquals("Banco central", metadata["location"])
-        assertEquals("200", metadata["updatedAt"])
-        assertEquals("Antes del día 10", descriptionFromBody(body))
+    @Test
+    fun `document keeps stable id and ownerUid for the security rules`() {
+        val document = reminder.toCloud().toDocument()
+
+        assertEquals(reminder.id, document["id"])
+        assertEquals(reminder.ownerUid, document["ownerUid"])
+        assertEquals("PERSONAL", document["category"])
+        assertEquals("HIGH", document["priority"])
+        assertEquals("IN_PROGRESS", document["status"])
+        assertEquals(1_700_000_000_000L, document["dueDate"])
+        assertEquals(200L, document["updatedAt"])
+        assertEquals(CloudReminder.CURRENT_SCHEMA_VERSION, document["schemaVersion"])
     }
 
     @Test
-    fun `remote dto with clientId maps to domain using metadata fallback`() {
-        val dto = RemoteReminderDto(
-            remoteId = 7L,
-            title = "Recordatorio remoto",
-            body = encodeRemoteBody(reminder)
+    fun `cloud document roundtrip returns a synced domain reminder`() {
+        val document = reminder.toCloud().toDocument()
+
+        val parsed = document.toCloudReminderOrNull(
+            documentId = reminder.id,
+            expectedOwnerUid = reminder.ownerUid
         )
+        requireNotNull(parsed)
 
-        val domain = dto.toDomainOrNull()
-
-        requireNotNull(domain)
-        assertEquals("local-client-id", domain.id)
-        assertEquals(7L, domain.remoteId)
-        assertEquals(ReminderCategory.PERSONAL, domain.category)
-        assertEquals(ReminderPriority.HIGH, domain.priority)
+        val domain = parsed.toDomain()
+        assertEquals(reminder.id, domain.id)
+        assertEquals(reminder.ownerUid, domain.ownerUid)
+        assertEquals(reminder.title, domain.title)
+        assertEquals(reminder.description, domain.description)
+        assertEquals(reminder.category, domain.category)
+        assertEquals(reminder.priority, domain.priority)
+        assertEquals(reminder.status, domain.status)
+        assertEquals(reminder.dueDate, domain.dueDate)
+        assertEquals(reminder.locationOrNotice, domain.locationOrNotice)
         assertEquals(SyncState.SYNCED, domain.syncState)
-        assertEquals(1_700_000_000_000L, domain.dueDate)
+        assertNull(domain.syncError)
     }
 
     @Test
-    fun `foreign remote dto without clientId is ignored`() {
-        val dto = RemoteReminderDto(
-            remoteId = 1L,
-            title = "sunt aut facere",
-            body = "Post de ejemplo de JSONPlaceholder"
+    fun `document owned by another account is rejected`() {
+        val document = reminder.toCloud().toDocument()
+
+        val parsed = document.toCloudReminderOrNull(
+            documentId = reminder.id,
+            expectedOwnerUid = "uid-cuenta-b"
         )
 
-        assertNull(dto.toDomainOrNull())
+        assertNull(parsed)
     }
 
     @Test
-    fun `request includes stable clientId for reconciliation`() {
-        val request = reminder.toRemoteRequest()
+    fun `document whose id does not match its path is rejected`() {
+        val document = reminder.toCloud().toDocument()
 
-        assertEquals("local-client-id", request.clientId)
-        assertEquals(reminder.title, request.title)
-        assertEquals(reminder.updatedAt, request.updatedAt)
-        assertTrue(request.body.contains("[recordatorio]"))
+        val parsed = document.toCloudReminderOrNull(
+            documentId = "otro-id",
+            expectedOwnerUid = reminder.ownerUid
+        )
+
+        assertNull(parsed)
+    }
+
+    @Test
+    fun `document without a valid title is rejected`() {
+        val document = reminder.toCloud().toDocument() + ("title" to "   ")
+
+        val parsed = document.toCloudReminderOrNull(
+            documentId = reminder.id,
+            expectedOwnerUid = reminder.ownerUid
+        )
+
+        assertNull(parsed)
+    }
+
+    @Test
+    fun `document with numeric timestamps survives Firestore number types`() {
+        val document = mapOf<String, Any?>(
+            "id" to "doc-1",
+            "ownerUid" to "uid-a",
+            "title" to "Recordatorio",
+            "category" to "WORK",
+            "priority" to "LOW",
+            "status" to "COMPLETED",
+            "createdAt" to 1_000, // Int, como puede devolverlo Firestore
+            "updatedAt" to 2_000L
+        )
+
+        val parsed = document.toCloudReminderOrNull("doc-1", "uid-a")
+        requireNotNull(parsed)
+
+        assertEquals(1_000L, parsed.createdAt)
+        assertEquals(2_000L, parsed.updatedAt)
+        assertEquals(ReminderCategory.WORK, parsed.category)
+        assertEquals(ReminderStatus.COMPLETED, parsed.status)
+    }
+
+    @Test
+    fun `sync state survives the entity roundtrip`() {
+        val pending = reminder.copy(syncState = SyncState.PENDING, syncError = "sin red")
+
+        val restored = pending.toEntity(isDeleted = true, syncedAt = 300L).toDomain()
+
+        assertEquals(SyncState.PENDING, restored.syncState)
+        assertEquals("sin red", restored.syncError)
+        assertTrue(pending.toEntity(isDeleted = true).isDeleted)
     }
 }

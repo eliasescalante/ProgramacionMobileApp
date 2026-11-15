@@ -63,6 +63,7 @@ fun ReminderDetailScreen(
         key = "detail-$reminderId",
         factory = ReminderViewModelFactory(
             repository = AppContainer.reminderRepository,
+            authRepository = AppContainer.authRepository,
             reminderId = reminderId
         )
     )
@@ -169,14 +170,10 @@ fun ReminderDetailScreen(
                         )
                         DetailRow("Creado", formatDate(reminder.createdAt))
                         DetailRow("Última modificación", formatDate(reminder.updatedAt))
-                        DetailRow(
-                            "Identificador local",
-                            reminder.id
-                        )
-                        DetailRow(
-                            "Identificador remoto",
-                            reminder.remoteId?.toString() ?: "Todavía no asignado"
-                        )
+                        // El mismo id identifica la fila de Room y el documento
+                        // users/{uid}/reminders/{id} de Firestore.
+                        DetailRow("Identificador (Room y Firestore)", reminder.id)
+                        DetailRow("Cuenta propietaria", reminder.ownerUid)
 
                         Text(
                             text = "Cambiar estado",

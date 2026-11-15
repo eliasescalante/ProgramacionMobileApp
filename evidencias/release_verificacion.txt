@@ -1,0 +1,34 @@
+﻿=== Verificacion de artefactos release ===
+Fecha: 2026-11-15 19:39:24
+Build-tools: 36.1.0
+
+--- apksigner verify --verbose --print-certs ---
+Verifies
+Verified using v1 scheme (JAR signing): false
+Verified using v2 scheme (APK Signature Scheme v2): true
+Verified using v3 scheme (APK Signature Scheme v3): false
+Verified using v3.1 scheme (APK Signature Scheme v3.1): false
+Verified using v4 scheme (APK Signature Scheme v4): false
+Verified for SourceStamp: false
+Number of signers: 1
+Signer #1 certificate DN: CN=Elias Escalante, OU=PM, O=UNAH, L=Tegucigalpa, ST=Francisco Morazan, C=HN
+Signer #1 certificate SHA-256 digest: a4f271891c9f48f1c6394fd063fd4a8138f810e9f7e4100268717f1d9da35db5
+Signer #1 certificate SHA-1 digest: 294692a90a6691ff00bcae009d63b2addc293d7c
+Signer #1 certificate MD5 digest: 5f721614411a55fb3bf06f9d3e26ca87
+Signer #1 key algorithm: RSA
+Signer #1 key size (bits): 2048
+Signer #1 public key SHA-256 digest: 5366612e07667bb941c81b1bb86b1bd77bd2d55301ba006b1b76d3ce5933f664
+Signer #1 public key SHA-1 digest: 9842ca4f1eb277c6bef16262ea248147dd401fde
+Signer #1 public key MD5 digest: 8f85d0686974c372da7d7ff1c1ed0985
+
+--- aapt2 dump badging ---
+package: name='com.example.api1_eliasescalante_pm' versionCode='4' versionName='4.0' platformBuildVersionName='17' platformBuildVersionCode='37' compileSdkVersion='37' compileSdkVersionCodename='17'
+minSdkVersion:'24'
+targetSdkVersion:'37'
+application-label:'API1- ELIAS ESCALANTE - PM'
+
+--- Archivos y SHA-256 ---
+app-release.apk | 6183674 bytes | 5.9 MB
+app-release.aab | 8466886 bytes | 8.07 MB
+APK  SHA256 0DE8688B11F9EA76529262CBA44DF8923172370B30D9F452E53602DAECE12625
+AAB  SHA256 FD178201D38DD1ABC291BC75409A30A32BB8E02410D0BB83C5D9608B1BE10FB5

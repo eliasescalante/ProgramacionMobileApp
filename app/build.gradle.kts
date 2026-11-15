@@ -6,6 +6,26 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+// ---------------------------------------------------------------------------
+// Google Services (Firebase)
+//
+// El plugin se aplica únicamente si existe app/google-services.json. Así el
+// proyecto se puede compilar y ejecutar las pruebas unitarias sin credenciales
+// reales. Para usar Firebase hay que descargar el archivo desde la consola y
+// dejarlo en app/. Ver FIREBASE_SETUP.md.
+// ---------------------------------------------------------------------------
+val googleServicesFile = file("google-services.json")
+if (googleServicesFile.exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
+// ---------------------------------------------------------------------------
+// Configuración local (no versionada)
+//
+// local.properties guarda la ruta del SDK y datos del entorno de desarrollo.
+// El archivo de firma se busca fuera del repositorio para no versionar
+// credenciales. Ver RELEASE_SIGNING.md.
+// ---------------------------------------------------------------------------
 val localProperties = Properties().apply {
     val file = rootProject.file("local.properties")
     if (file.exists()) {
@@ -13,9 +33,19 @@ val localProperties = Properties().apply {
     }
 }
 
-val remoteBaseUrl = (project.findProperty("REMOTE_BASE_URL") as String?)
-    ?: localProperties.getProperty("REMOTE_BASE_URL")
-    ?: "https://jsonplaceholder.typicode.com/"
+val signingPropertiesFile: File? = sequenceOf(
+    project.findProperty("SIGNING_PROPERTIES_FILE") as String?,
+    System.getenv("RELEASE_SIGNING_PROPERTIES"),
+    rootProject.file("../API1ELIASESCALANTEPM-signing/keystore.properties").absolutePath,
+    rootProject.file("keystore.properties").absolutePath
+)
+    .filterNotNull()
+    .map(::File)
+    .firstOrNull { it.isFile }
+
+val signingProperties = Properties().apply {
+    signingPropertiesFile?.inputStream()?.use { load(it) }
+}
 
 android {
     namespace = "com.example.api1_eliasescalante_pm"
@@ -27,31 +57,65 @@ android {
         applicationId = "com.example.api1_eliasescalante_pm"
         minSdk = 24
         targetSdk = 37
-        versionCode = 3
-        versionName = "3.0"
+
+        // Versión candidata para el grupo de testers.
+        // versionCode se incrementa en cada entrega; versionName es legible.
+        versionCode = 4
+        versionName = "4.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
 
-        // URL base configurable. Se puede sobreescribir con -PREMOTE_BASE_URL=...
-        // o desde local.properties / gradle.properties. Ver remote.properties.example.
-        buildConfigField("String", "REMOTE_BASE_URL", "\"$remoteBaseUrl\"")
+    signingConfigs {
+        if (signingPropertiesFile != null) {
+            create("release") {
+                storeFile = File(
+                    requireNotNull(signingProperties.getProperty("storeFile")) {
+                        "keystore.properties debe definir storeFile"
+                    }
+                )
+                storePassword = requireNotNull(signingProperties.getProperty("storePassword"))
+                keyAlias = requireNotNull(signingProperties.getProperty("keyAlias"))
+                keyPassword = requireNotNull(signingProperties.getProperty("keyPassword"))
+            }
+        }
     }
 
     buildTypes {
+        debug {
+            // Misma applicationId que release para que google-services.json
+            // (registrado con ese package) también aplique en depuración.
+            buildConfigField("String", "APP_ENV", "\"development\"")
+            buildConfigField("boolean", "CLOUD_LOGGING", "true")
+        }
+
         release {
+            buildConfigField("String", "APP_ENV", "\"production\"")
+            buildConfigField("boolean", "CLOUD_LOGGING", "false")
+
+            signingConfig = signingConfigs.findByName("release")
+
             optimization {
                 enable = true
                 packageScope = setOf("androidx.**", "kotlin.**", "kotlinx.**")
             }
         }
     }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
     }
 }
 
@@ -66,7 +130,9 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.navigation.compose)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.kotlinx.coroutines.play.services)
 
     // Persistencia local
     implementation(libs.androidx.room.runtime)
@@ -74,23 +140,20 @@ dependencies {
     ksp(libs.androidx.room.compiler)
     implementation(libs.androidx.datastore.preferences)
 
-    // Red
-    implementation(libs.retrofit)
-    implementation(libs.retrofit.converter.gson)
-    implementation(libs.okhttp)
-    implementation(libs.okhttp.logging.interceptor)
-    implementation(libs.gson)
+    // Firebase (Backend as a Service): autenticación y Firestore
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.auth)
+    implementation(libs.firebase.firestore)
 
     testImplementation(libs.junit)
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
+    testImplementation(libs.kotlinx.coroutines.test)
+
     androidTestImplementation(libs.androidx.room.testing)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
+
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
-
-    // Navigation Compose
-    implementation("androidx.navigation:navigation-compose:2.9.6")
 }

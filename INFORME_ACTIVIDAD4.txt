@@ -1,0 +1,1263 @@
+================================================================================
+INFORME DE LA ACTIVIDAD 4
+Recordatorios contextuales con Firebase Authentication y Cloud Firestore
+================================================================================
+
+Proyecto      : API1 - ELIAS ESCALANTE - PM
+Paquete       : com.example.api1_eliasescalante_pm
+Version       : 4.0 (versionCode 4)
+Fecha         : 15 de noviembre de 2026
+Backend       : Firebase (Authentication + Cloud Firestore)
+Persistencia  : Room (local) + DataStore (preferencias)
+Entrega       : proyecto completo + APK release firmado + AAB
+
+--------------------------------------------------------------------------------
+CONTENIDO
+--------------------------------------------------------------------------------
+
+ 1. Resumen ejecutivo
+ 2. Objetivo y alcance de la consigna
+ 3. Metodologia de evaluacion
+ 4. Linea base: el proyecto despues de la Actividad 3
+ 5. Evolucion hacia la version 4
+ 6. Analisis de la solucion implementada
+    6.1  Esquema del flujo Compose -> ViewModel -> Repositorio -> Room/Firebase
+    6.2  Modelo de datos local y remoto
+    6.3  Enfoque local-first y algoritmo de sincronizacion
+    6.4  Identidad estable y prevencion de duplicados
+    6.5  Autenticacion: estados y casos cubiertos
+    6.6  Aislamiento multiusuario: tres barreras
+    6.7  Reglas de seguridad de Firestore explicadas
+    6.8  Proteccion local, cierre de sesion y datos que quedan
+    6.9  Separacion entre autenticacion, autorizacion y proteccion local
+    6.10 Manejo de errores del proveedor
+    6.11 Interfaz y experiencia de uso
+ 7. Trazabilidad de requisitos
+ 8. Escenarios de sincronizacion
+ 9. Resultados de las pruebas
+    9.1  Pruebas unitarias
+    9.2  Pruebas instrumentadas de Room y flujo de interfaz
+    9.3  Prueba de acceso cruzado entre dos cuentas
+    9.4  Compilacion y artefactos
+    9.5  Instalacion y prueba del APK release
+    9.6  Protocolo de prueba manual en dispositivo
+10. Release: version, firma y artefactos
+11. Instrucciones para configurar, compilar y ejecutar
+12. Limitaciones conocidas y mejoras futuras
+13. Conclusion
+14. Anexo: mapa de archivos y entregables
+
+================================================================================
+1. RESUMEN EJECUTIVO
+================================================================================
+
+La Actividad 4 convierte la aplicacion de recordatorios en una aplicacion
+multiusuario real. Se reemplazo el backend simulado (Retrofit contra
+JSONPlaceholder) por Firebase como servicio gestionado:
+
+  - Firebase Authentication administra el registro, el inicio de sesion y la
+    identidad. De alli sale el uid que separa los datos de cada persona.
+  - Cloud Firestore guarda una copia remota de los recordatorios en
+    users/{uid}/reminders/{reminderId}.
+  - Room sigue siendo la fuente de verdad local: la interfaz lee siempre de
+    Room y funciona sin conexion.
+
+El aislamiento no depende de la interfaz. Se apoya en tres barreras
+independientes:
+
+  1. La ruta de Firestore incluye el uid de la sesion.
+  2. Las reglas de seguridad exigen request.auth.uid == uid y validan que el
+     cuerpo del documento coincida con la ruta.
+  3. Todas las consultas de Room exigen ownerUid; al iniciar sesion se borran
+     las filas de otras cuentas y al cerrar sesion se borra la copia local.
+
+Resultados principales:
+
+  - 38 pruebas unitarias ejecutadas, 0 fallos.
+  - 10 pruebas instrumentadas sobre emulador (Room y flujo offline de la
+    interfaz), 0 fallos.
+  - 6/6 comprobaciones de acceso cruzado correctas, con HTTP 403 real de
+    Firestore cuando la cuenta B intenta leer o escribir el arbol de A.
+  - APK release firmado e instalado como aplicacion independiente; AAB
+    generado para publicacion.
+  - Documentacion de cuatro escenarios de sincronizacion con el estado en
+    Room, el estado en Firestore y el resultado para el usuario.
+
+El proyecto conserva DataStore para preferencias, la navegacion Compose, el
+diseno visual y la experiencia offline de la Actividad 3. Lo que cambio es la
+fuente remota, la identidad y todas las reglas de acceso.
+
+================================================================================
+2. OBJETIVO Y ALCANCE DE LA CONSIGNA
+================================================================================
+
+La consigna pide evolucionar la aplicacion a una version final con Firebase
+como Backend as a Service, manteniendo Room como almacenamiento local y
+cumpliendo estos puntos:
+
+  a) Autenticacion de usuarios (registro, login, estado en curso, sesion
+     activa, error, logout, reapertura con sesion existente y perdida o
+     invalidez de sesion).
+  b) Sincronizacion de recordatorios entre dispositivos mediante Firestore,
+     incluyendo creacion, modificacion, recuperacion en otro equipo, cambios
+     offline, operaciones pendientes, retorno de la red y reintento sin
+     duplicacion.
+  c) Aislamiento multiusuario: cada cuenta ve solo sus datos.
+  d) Reglas de seguridad que impidan el acceso cruzado, sin confiar en la
+     visibilidad de los botones.
+  e) Documentacion de al menos cuatro escenarios de sincronizacion con el
+     estado en Room, en Firestore y el resultado para el usuario.
+  f) Cierre de sesion que impida que una cuenta nueva vea los datos de la
+     anterior, documentando que queda en el dispositivo.
+  g) Separacion clara entre autenticacion, autorizacion y proteccion local.
+  h) Prueba y documentacion de un intento de acceso a registros de otra
+     cuenta.
+  i) Build release con versionCode/versionName, firma con credenciales fuera
+     del repositorio, APK instalable y AAB.
+  j) Instalacion y prueba del APK release como aplicacion independiente,
+     registrando version, variante, fecha y pruebas.
+  k) Documentacion del flujo Compose -> ViewModel -> Repositorio -> Room y
+     Firebase, con esquema.
+  l) Entrega de una carpeta comprimida con el proyecto, el APK y el AAB.
+
+Queda fuera de alcance: verificacion de correo, recuperacion de contrasena,
+notificaciones push, sincronizacion en tiempo real con listeners y publication
+en Google Play. Nada de eso es necesario para demostrar los requisitos.
+
+================================================================================
+3. METODOLOGIA DE EVALUACION
+================================================================================
+
+La solucion se evaluo en cinco niveles:
+
+  1. Revision estatica del codigo y de las dependencias.
+  2. Pruebas unitarias en JVM con dobles de Room, Firestore, red y sesion.
+     No requieren emulador ni credenciales.
+  3. Pruebas instrumentadas en un emulador Android (Medium_Phone): Room y
+     flujo offline completo sobre la interfaz Compose.
+  4. Prueba de acceso cruzado contra el proyecto real de Firebase, con dos
+     cuentas creadas por la API REST de Authentication y tokens reales.
+  5. Prueba del APK release como aplicacion independiente: instalacion,
+     arranque, firma, version y comportamiento basico.
+
+Criterio de aceptacion:
+
+  - Una operacion solo se considera terminada cuando la fila de Room queda en
+    SYNCED y el documento existe en Firestore.
+  - Un acceso cruzado se considera bloqueado cuando el servidor responde 403,
+    aunque el cliente conozca el uid y el id del documento.
+  - El cierre de sesion se considera correcto cuando Room queda vacio y el
+    flujo de la interfaz emite una lista vacia antes de mostrar el login.
+
+================================================================================
+4. LINEA BASE: EL PROYECTO DESPUES DE LA ACTIVIDAD 3
+================================================================================
+
+La Actividad 3 entrego una aplicacion con:
+
+  - Room como fuente de verdad local (tabla reminders, version 1).
+  - DataStore Preferences para tema, mostrar completados, orden y filtro.
+  - Repositorio local-first con estados PENDING/SYNCED/ERROR.
+  - Sincronizacion contra JSONPlaceholder mediante Retrofit y OkHttp.
+  - Mutex para serializar sincronizaciones y un clientId UUID para
+    reconciliar respuestas perdidas.
+  - Tombstones para borrados sin conexion.
+  - Interfaz Compose con listado, alta, detalle editable y ajustes.
+  - 20 pruebas unitarias y una prueba instrumentada del DAO.
+
+Limitaciones frente a la Actividad 4:
+
+  - No habia usuarios: todos los registros eran globales.
+  - El servicio remoto era de demostracion y no ofrecia autorizacion.
+  - Los datos de una persona quedaban visibles para cualquiera que usara el
+    dispositivo.
+  - No existia una copia remota por cuenta ni reglas de seguridad.
+
+La version 4 conserva lo que funcionaba (Room, DataStore, local-first,
+tombstones, UI) y reemplaza el backend y la identidad.
+
+================================================================================
+5. EVOLUCION HACIA LA VERSION 4
+================================================================================
+
+5.1 CAMBIOS DE CONFIGURACION
+
+  - versionCode 4 y versionName "4.0".
+  - Plugin com.google.gms.google-services 4.6.0, aplicado solo si existe
+    app/google-services.json.
+  - Firebase BoM fijada en 34.12.0 por compatibilidad con el Kotlin integrado
+    de AGP 9 (2.2.10). Ver seccion 5.4.
+  - Dependencias: firebase-auth, firebase-firestore y
+    kotlinx-coroutines-play-services (para await() sobre Task).
+  - Firma release configurada con un archivo keystore.properties que vive
+    fuera del repositorio.
+  - android:allowBackup="false" para que la base Room con datos personales no
+    se respalde en la nube del dispositivo.
+
+5.2 CAMBIOS DE ARQUITECTURA
+
+  - Se elimino el paquete data/remote (Retrofit, DTO, ApiResult) y las
+    dependencias Retrofit, OkHttp y Gson.
+  - Se agrego data/auth: AuthDataSource, FirebaseAuthDataSource y
+    AuthErrorMapper.
+  - Se agrego data/cloud: ReminderCloudDataSource,
+    FirestoreReminderCloudDataSource, CloudReminder y CloudResult.
+  - Se agrego SessionProvider: la unica fuente del uid.
+  - AuthRepository administra el estado de sesion y la invalidacion.
+  - OfflineFirstReminderRepository se reescribio para coordinar Room,
+    Firestore y la sesion.
+  - AppRoot decide que pantalla mostrar segun el estado de autenticacion.
+  - ReminderEntity gano ownerUid y syncedAt; se elimino remoteId.
+  - La base Room subio a version 2 con MIGRATION_1_2.
+  - La interfaz muestra la cuenta activa y permite cerrar sesion desde Ajustes.
+
+5.3 ARCHIVOS PRINCIPALES INCORPORADOS
+
+  domain/model/AuthUser.kt          AuthUser, AuthState, AuthMode, AuthException,
+                                    AuthValidation.
+  domain/model/SyncStatus.kt        Estados de sincronizacion, incluido NoSession.
+  data/auth/AuthDataSource.kt       Contrato de identidad.
+  data/auth/FirebaseAuthDataSource.kt Implementacion con FirebaseAuth.
+  data/auth/AuthErrorMapper.kt      Traduccion de errores del proveedor.
+  data/cloud/CloudResult.kt         Resultado tipado de operaciones remotas.
+  data/cloud/CloudReminder.kt       Modelo del documento y mapeo a Map.
+  data/cloud/ReminderCloudDataSource.kt Contrato remoto.
+  data/cloud/FirestoreReminderCloudDataSource.kt Implementacion Firestore.
+  data/repository/AuthRepository.kt Autenticacion e invalidacion de sesion.
+  data/repository/SessionProvider.kt uid de la sesion autenticada.
+  data/repository/OfflineFirstReminderRepository.kt Coordinacion Room/Firestore.
+  navigation/AppRoot.kt             Navegacion condicionada por la sesion.
+  ui/ui/screens/AuthScreen.kt       Registro e inicio de sesion.
+  ui/ui/screens/ConfigurationErrorScreen.kt Mensaje si falta Firebase.
+  viewmodel/AuthViewModel.kt        Estado del formulario de acceso.
+  viewmodel/ReminderViewModelFactory.kt Fabrica con repositorio y auth.
+  firestore.rules                   Reglas de seguridad publicadas.
+  FIREBASE_SETUP.md                 Configuracion del proyecto Firebase.
+  RELEASE_SIGNING.md                Firma y artefactos de entrega.
+  tools/cross_account_check.ps1     Prueba automatizada de acceso cruzado.
+
+5.4 COMPATIBILIDAD DE VERSIONES
+
+La compilacion con Firebase BoM 35.2.0 fallo con:
+
+  Module was compiled with an incompatible version of Kotlin.
+  The binary version of its metadata is 2.4.0, expected version is 2.2.0.
+
+AGP 9 compila con el Kotlin integrado 2.2.10, que solo lee metadatos de Kotlin
+hasta 2.2. Las BOM 34.13.0 en adelante y todas las 35.x publican
+firebase-auth compilado con Kotlin 2.3 o 2.4.
+
+Se verifico el metadato de cada artefacto y se eligio la ultima combinacion
+compatible:
+
+  BOM      firebase-auth  Metadatos  firebase-firestore  Metadatos
+  35.2.0   25.0.0         2.4.0      27.2.0              2.4.0
+  34.18.0  24.2.0         2.3.0      26.6.0              2.3.0
+  34.12.0  24.0.1         2.1.0      26.2.0              2.0.0
+  34.0.0   24.0.0         2.1.0      26.0.0              2.0.0
+
+La BOM 34.12.0 usa las mismas APIs que necesita la aplicacion (FirebaseAuth,
+FirebaseFirestore, set/get/delete y await) y compila sin advertencias de
+metadatos. La decision quedo documentada en FIREBASE_SETUP.md.
+
+================================================================================
+6. ANALISIS DE LA SOLUCION IMPLEMENTADA
+================================================================================
+
+6.1 ESQUEMA DEL FLUJO COMPOSE -> VIEWMODEL -> REPOSITORIO -> ROOM/FIREBASE
+
+  +----------------------------- Compose (UI) ------------------------------+
+  | AuthScreen  ReminderListScreen  ReminderCreateScreen                    |
+  | ReminderDetailScreen  ReminderSettingsScreen                            |
+  |                                                                         |
+  | - No importa Firebase, Room ni DataStore.                               |
+  | - Observa StateFlow/Flow del ViewModel.                                 |
+  | - Envia eventos (onClick, onValueChange) al ViewModel.                  |
+  +----------------+-------------------------------------+------------------+
+                   |                                     |
+          +--------v---------+                  +---------v-----------+
+          |  AuthViewModel   |                  | Reminder*ViewModel  |
+          |                  |                  | (List/Create/       |
+          | - valida correo  |                  |  Detail/Settings)   |
+          | - expone estado  |                  | - expone estado UI  |
+          | - dispara login  |                  | - dispara acciones  |
+          +--------+---------+                  +---------+-----------+
+                   |                                     |
+          +--------v----------+               +----------v----------------+
+          |  AuthRepository   |               |  ReminderRepository       |
+          |                   |<-- Session ---|  (interfaz)               |
+          | - login/register  |   Provider    |                           |
+          | - logout          |   (uid)       |                           |
+          | - sesion expirada |               |                           |
+          +--------+----------+               +----------+----------------+
+                   |                                     |
+          FirebaseAuth                 OfflineFirstReminderRepository
+          (identidad)                  |            |             |
+                                       |            |             |
+                                  Room DAO     DataStore     Firestore
+                               (verdad local) (prefs)      (copia remota)
+
+  Secuencia de una escritura:
+
+    1. Pantalla -> ViewModel: createReminder(draft)
+    2. ViewModel -> Repositorio: repository.createReminder(draft)
+    3. Repositorio: uid = sessionProvider.currentUid()
+                    (si no hay sesion, devuelve fallo y no toca nada)
+    4. Repositorio -> Room: upsert(entity con syncState = PENDING)
+    5. Room emite el Flow; el ViewModel actualiza el estado; Compose redibuja.
+    6. Repositorio -> appScope: syncNow()
+    7. syncNow -> Firestore: pull y push (con Mutex).
+    8. Firestore confirma -> Room: syncState = SYNCED, syncedAt = ahora.
+
+  Secuencia de una lectura:
+
+    Compose -> ViewModel.uiState -> repository.reminders
+            -> authState (uid) + dao.observeVisible(uid) + preferencias
+            -> si no hay sesion, flowOf(emptyList())
+
+  La UI nunca consulta Firestore. Si la nube no responde, Room sigue
+  emitiendo los datos locales y el usuario puede trabajar.
+
+6.2 MODELO DE DATOS LOCAL Y REMOTO
+
+  Room, tabla reminders (version 2):
+
+    id                 TEXT  PK. UUID estable; igual al id del documento.
+    ownerUid           TEXT  uid de Firebase Auth. Indice.
+    title              TEXT
+    description        TEXT?
+    category           TEXT  WORK | PERSONAL | HEALTH | OTHER
+    priority           TEXT  HIGH | MEDIUM | LOW
+    status             TEXT  PENDING | IN_PROGRESS | COMPLETED
+    dueDate            INTEGER?
+    locationOrNotice   TEXT?
+    syncState          TEXT  PENDING | SYNCING | SYNCED | ERROR
+    syncError          TEXT?
+    isDeleted          INTEGER (tombstone)
+    createdAt          INTEGER
+    updatedAt          INTEGER
+    syncedAt           INTEGER?
+
+  Indices: ownerUid, (ownerUid,status), (ownerUid,priority),
+  (ownerUid,syncState), syncedAt.
+
+  Migracion 1 -> 2:
+
+    - ALTER TABLE reminders ADD COLUMN ownerUid TEXT NOT NULL DEFAULT ''
+    - ALTER TABLE reminders ADD COLUMN syncedAt INTEGER
+    - DELETE FROM reminders WHERE ownerUid = ''
+    - Se eliminan los indices viejos y se crean los nuevos.
+
+  Se descartan las filas de la version 3 porque no tienen dueno y no hay forma
+  segura de asignarlas: podrian pertenecer a cualquier cuenta.
+
+  Firestore:
+
+    users/{uid}/reminders/{reminderId}
+      id            string   == reminderId
+      ownerUid      string   == uid de la ruta
+      title         string   1..120
+      description   string?
+      category      string
+      priority      string
+      status        string
+      dueDate       number?
+      locationOrNotice string?
+      createdAt     number
+      updatedAt     number
+      schemaVersion number
+
+  El documento del usuario users/{uid} no se usa y las reglas lo niegan
+  explicitamente. No hay colecciones globales.
+
+6.3 ENFOQUE LOCAL-FIRST Y ALGORITMO DE SINCRONIZACION
+
+  Escritura:
+
+    - Siempre primero en Room, con syncState = PENDING.
+    - La interfaz se actualiza al instante porque observa Room.
+    - Despues se intenta sincronizar; si no hay red, queda pendiente.
+
+  syncNow():
+
+    1. uid = sessionProvider.currentUid()
+       Sin sesion -> SyncStatus.NoSession y no se toca Firestore.
+    2. Si NetworkMonitor informa que no hay red -> SyncStatus.Offline.
+    3. Mutex.withLock:
+       a. Vuelve a comprobar sesion y red (pudieron cambiar mientras esperaba).
+       b. PULL: cloud.fetchAll(uid)
+          - Success: mezcla por updatedAt (last-write-wins).
+          - Unauthenticated: invalida la sesion.
+          - PermissionDenied: error no recuperable.
+          - Unavailable: offline.
+       c. Borra filas locales SYNCED que ya no existen en la nube (borrado
+          hecho en otro dispositivo).
+       d. PUSH: solo filas PENDING/ERROR del uid.
+          - Si isDeleted: cloud.delete(uid, id).
+          - Si no: cloud.upsert(uid, documento) con set().
+          - Exito: SYNCED + syncedAt.
+          - Error recuperable: ERROR + syncError (se reintenta despues).
+          - Error de sesion: invalida la sesion.
+    4. Publica Success(pushed, pulled), Offline, NoSession o Error.
+
+  Disparadores de sincronizacion:
+
+    - Al iniciar sesion o restaurar una sesion.
+    - Al volver la conectividad (NetworkMonitor).
+    - Despues de cada creacion, modificacion, cambio de estado o borrado.
+    - Boton "Sync" del listado y de Ajustes.
+
+  El Mutex garantiza que dos disparadores simultaneos no ejecuten dos pushes
+  del mismo registro: el segundo espera y encuentra la cola vacia.
+
+6.4 IDENTIDAD ESTABLE Y PREVENCION DE DUPLICADOS
+
+  Cada recordatorio nace con un UUID que se usa como:
+
+    - clave primaria de Room;
+    - id del documento de Firestore;
+    - valor del campo id dentro del documento.
+
+  El push usa set() sobre users/{uid}/reminders/{id}. Repetir la operacion
+  escribe el mismo documento, por lo que no puede duplicar registros aunque la
+  respuesta se pierda o el usuario pulse Sync varias veces.
+
+  Se elimino remoteId de la Actividad 3: ya no hace falta un id numerico del
+  servidor. El id estable cumple las dos funciones.
+
+  En el pull, un documento remoto se importa con el mismo id. Si ya existe una
+  fila local:
+
+    - si la fila local esta pendiente y es mas nueva, se conserva y se envia;
+    - si la remota es mas nueva (updatedAt >=), se sobrescribe la local;
+    - si la fila local es un tombstone, no se resucita.
+
+  Defensa adicional en el cliente: mergeCloud ignora cualquier documento cuyo
+  ownerUid no coincida con el uid de la sesion, aunque el servidor fallara.
+
+6.5 AUTENTICACION: ESTADOS Y CASOS CUBIERTOS
+
+  AuthState:
+
+    Restoring        Firebase todavia no respondio.
+    SignedIn(user)   Sesion valida; contiene uid y email.
+    SignedOut        Sin sesion.
+    SessionExpired   La sesion dejo de ser valida (revocada o token invalido).
+
+  Casos de la consigna:
+
+    Registro              AuthRepository.register valida correo y contrasena
+                          (minimo 6), llama a FirebaseAuth.createUserWithEmail
+                          AndPassword y publica SignedIn.
+    Login                 login() valida y llama a signInWithEmailAndPassword.
+    Estado en curso       AuthUiState.isSubmitting; boton deshabilitado con
+                          indicador y texto "Verificando..." o "Creando cuenta...".
+    Error                 AuthErrorMapper traduce los codigos de Firebase a
+                          mensajes en espanol; la UI muestra state.error.
+    Sesion activa         FirebaseAuth mantiene la sesion; al reabrir la app se
+                          restaura y AppRoot muestra la lista sin pedir login.
+    Reapertura            start() recoge authState y ademas ejecuta
+                          reloadSession() para detectar una cuenta deshabilitada.
+    Perdida/invalidez     Si reloadSession falla con un error de credenciales,
+                          o Firestore responde UNAUTHENTICATED, se ejecuta
+                          safelySignOut() y se publica SessionExpired.
+    Logout                logout() cierra Firebase Auth, publica SignedOut y el
+                          repositorio borra Room.
+
+  Validacion local (AuthValidation):
+
+    - Correo no vacio, con formato basico y sin espacios.
+    - Contrasena de al menos 6 caracteres.
+    - Confirmacion igual a la contrasena en el registro.
+
+  La contrasena nunca se guarda ni se registra en logs. El token lo administra
+  Firebase Authentication; la app no lo duplica en DataStore ni en Room.
+
+6.6 AISLAMIENTO MULTIUSUARIO: TRES BARRERAS
+
+  Barrera 1: la ruta y el uid de la sesion
+
+    FirestoreReminderCloudDataSource recibe el uid del repositorio. Antes de
+    cada operacion comprueba que auth.currentUser?.uid sea el mismo. Si no hay
+    usuario -> Unauthenticated. Si el uid cambio -> PermissionDenied.
+
+  Barrera 2: reglas de Firestore (servidor)
+
+    - owns(uid) exige request.auth != null y request.auth.uid == uid.
+    - validReminder exige ownerUid == uid, id == reminderId, tipos correctos y
+      valores permitidos.
+    - En update, createdAt debe permanecer igual.
+    - Todo lo que no esta permitido queda denegado.
+
+  Barrera 3: Room (dispositivo)
+
+    - Todas las consultas del DAO reciben ownerUid.
+    - Al iniciar sesion: DELETE FROM reminders WHERE ownerUid != uid.
+    - Al cerrar sesion: DELETE FROM reminders.
+    - El flujo reminders depende de authState: sin sesion emite lista vacia.
+
+  Las tres barreras son independientes. Si se ocultara un boton o se modificara
+  el cliente, el servidor seguiria denegando el acceso.
+
+6.7 REGLAS DE SEGURIDAD DE FIRESTORE EXPLICADAS
+
+  Regla completa (firestore.rules):
+
+    rules_version = '2';
+    service cloud.firestore {
+      match /databases/{database}/documents {
+
+        function signedIn() { return request.auth != null; }
+
+        function owns(uid) {
+          return signedIn() && request.auth.uid == uid;
+        }
+
+        function validReminder(uid, reminderId) {
+          let data = request.resource.data;
+          return data.ownerUid == uid
+            && data.id == reminderId
+            && data.title is string
+            && data.title.size() > 0
+            && data.title.size() <= 120
+            && data.createdAt is int
+            && data.updatedAt is int
+            && data.updatedAt >= data.createdAt
+            && data.status in ['PENDING','IN_PROGRESS','COMPLETED']
+            && data.priority in ['HIGH','MEDIUM','LOW']
+            && data.category in ['WORK','PERSONAL','HEALTH','OTHER'];
+        }
+
+        match /users/{uid} {
+          allow read, write: if false;
+
+          match /reminders/{reminderId} {
+            allow read: if owns(uid);
+            allow create: if owns(uid) && validReminder(uid, reminderId);
+            allow update: if owns(uid)
+              && validReminder(uid, reminderId)
+              && request.resource.data.createdAt == resource.data.createdAt;
+            allow delete: if owns(uid);
+          }
+        }
+      }
+    }
+
+  Por que cada parte importa:
+
+    - allow read/create/update/delete: if owns(uid): una cuenta no puede
+      operar en el arbol de otra.
+    - ownerUid == uid e id == reminderId: evita que un cliente cree un
+      documento en su arbol declarando otro dueno, o que "mueva" un registro.
+    - createdAt == resource.data.createdAt en update: evita reescribir la fecha
+      de creacion y falsear el orden.
+    - Tipos y valores permitidos: evita documentos corruptos que rompan la
+      lectura en otro dispositivo.
+    - El resto de la base queda denegado por defecto.
+
+  Verificacion:
+
+    - GET anonimo a users/sonda/reminders -> 403 Missing or insufficient
+      permissions.
+    - Con dos cuentas reales, los seis intentos del script dieron el resultado
+      esperado (seccion 9.3).
+
+6.8 PROTECCION LOCAL, CIERRE DE SESION Y DATOS QUE QUEDAN
+
+  Al cerrar sesion:
+
+    - AuthRepository.logout() cierra Firebase Auth y publica SignedOut.
+    - OfflineFirstReminderRepository observa el cambio y ejecuta
+      dao.deleteAll().
+    - El flujo reminders emite una lista vacia aunque el proceso siga vivo.
+    - AppRoot descompone la lista y muestra AuthScreen.
+
+  Datos que quedan en el dispositivo:
+
+    | Dato                          | Despues del logout                        |
+    |-------------------------------|-------------------------------------------|
+    | Recordatorios en Room         | Eliminados.                               |
+    | Token de Firebase             | Eliminado por signOut.                    |
+    | Preferencias (DataStore)      | Se conservan (tema, orden, filtro).       |
+    | Contrasena                    | Nunca se guarda.                          |
+    | Copia en Firestore            | Se conserva y sigue protegida por reglas. |
+
+  Proteccion adicional:
+
+    - android:allowBackup="false": la base Room no se respalda automaticamente
+      en la nube del dispositivo.
+    - No hay tokens, claves ni contrasenas en el codigo ni en archivos
+      versionados.
+    - google-services.json y el keystore estan fuera del control de versiones
+      (.gitignore).
+
+6.9 SEPARACION ENTRE AUTENTICACION, AUTORIZACION Y PROTECCION LOCAL
+
+  Autenticacion (quien sos):
+
+    - Firebase Authentication.
+    - AuthRepository y FirebaseAuthDataSource.
+    - Producen AuthUser con uid y email.
+
+  Autorizacion (que podes ver):
+
+    - Reglas de Firestore en el servidor.
+    - Ruta users/{uid} y comprobacion auth.currentUser.uid en el cliente.
+    - No depende de la UI ni de la visibilidad de botones.
+
+  Proteccion local (que queda en el equipo):
+
+    - Room con ownerUid en todas las consultas.
+    - Purga al cambiar de cuenta y borrado al cerrar sesion.
+    - allowBackup=false.
+    - DataStore solo guarda preferencias, nunca credenciales.
+
+  Cada capa puede fallar sin que las otras dos dejen pasar datos: si la UI
+  mostrara un boton de mas, Firestore devuelve 403; si el cliente pidiera otro
+  uid, las reglas lo rechazan; si quedara una fila local, el DAO no la devuelve
+  para otra cuenta y ademas se purga al iniciar sesion.
+
+6.10 MANEJO DE ERRORES DEL PROVEEDOR
+
+  CloudResult:
+
+    Success(value)          Operacion completada.
+    Unauthenticated(msg)    Sesion ausente o invalida.
+    PermissionDenied(msg)   Reglas o uid incoherente.
+    Unavailable(msg)        Red, timeout, servicio no disponible.
+    Failure(msg, retryable) Error de datos o desconocido.
+
+  Traduccion (FirestoreReminderCloudDataSource.toCloudFailure):
+
+    PERMISSION_DENIED        -> PermissionDenied
+    UNAUTHENTICATED          -> Unauthenticated
+    UNAVAILABLE, DEADLINE,   -> Unavailable
+    CANCELLED, RESOURCE,
+    ABORTED, INTERNAL
+    NOT_FOUND                -> Failure(retryable = false)
+    INVALID_ARGUMENT,        -> Failure(retryable = false)
+    FAILED_PRECONDITION
+
+  AuthException traduce los codigos de FirebaseAuth (correo ya registrado,
+  credenciales invalidas, contrasena debil, demasiados intentos, red, etc.) a
+  mensajes en espanol. La interfaz nunca interpreta codigos del proveedor.
+
+6.11 INTERFAZ Y EXPERIENCIA DE USO
+
+  - AppRoot muestra "Restaurando sesion..." mientras Firebase responde.
+  - AuthScreen permite alternar entre iniciar sesion y registrarse, muestra
+    errores por campo, error general y aviso de sesion expirada.
+  - El listado muestra un banner con el estado de sincronizacion y el numero
+    de cambios pendientes.
+  - Cada tarjeta indica Pendiente, Sincronizado, Sincronizando o Error.
+  - El detalle muestra el id estable y el uid del dueno, utiles para verificar
+    contra Firestore.
+  - Ajustes incluye la seccion Cuenta (correo, uid corto, pendientes),
+    sincronizacion manual, cierre de sesion con dialogo de advertencia, datos
+    locales y preferencias.
+
+================================================================================
+7. TRAZABILIDAD DE REQUISITOS
+================================================================================
+
+  Requisito                                   Implementacion / evidencia
+  ------------------------------------------  -----------------------------
+  Firebase como BaaS                          Auth + Firestore; AppContainer.
+  Room como fuente local                      DAO + Flows; UI lee de Room.
+  Sin Firebase en @Composable                 ViewModels y repositorios.
+  Ruta users/{uid}/reminders/{id}             FirestoreReminderCloudDataSource.
+  Creacion sincronizada                       createReminder + push.
+  Modificacion sincronizada                   updateReminder + push.
+  Recuperacion en otro dispositivo            pull + mergeCloud.
+  Cambios offline                             PENDING + NetworkMonitor.
+  Operaciones pendientes visibles             observePendingCount y banner.
+  Retorno de red                              collector de isOnlineFlow.
+  Reintento sin duplicacion                   id estable + set() + Mutex.
+  Acceso solo al usuario autenticado          ruta + reglas + Room.
+  Reglas que impiden acceso cruzado           firestore.rules + script.
+  Visibilidad de botones no es autorizacion  probado con REST (403).
+  4+ escenarios documentados                  seccion 8.
+  Registro / login / errores / logout         AuthRepository + AuthScreen.
+  Sesion activa y reapertura                  FirebaseAuth + restore + reload.
+  Perdida de sesion                           reload y UNAUTHENTICATED.
+  Nueva cuenta no ve datos previos            deleteAllExcept / deleteAll.
+  Que queda local documentado                 seccion 6.8 y 9.6.
+  Separacion auth/autorizacion/proteccion      seccion 6.9.
+  Prueba de acceso a otra cuenta              seccion 9.3 (6/6).
+  versionCode / versionName                   4 / "4.0".
+  Build types / flavors                       debug y release, sin flavors.
+  Firma fuera del repositorio                 keystore.properties externo.
+  APK release instalable                      seccion 9.5.
+  AAB                                         bundleRelease.
+  Instalar y probar APK release               seccion 9.5.
+  Registrar version/variante/fecha/pruebas    seccion 10.
+  Carpeta comprimida con proyecto + APK + AAB seccion 14.
+  Esquema del flujo                           seccion 6.1.
+  Informe con escenarios y pruebas            este documento.
+
+================================================================================
+8. ESCENARIOS DE SINCRONIZACION
+================================================================================
+
+Los escenarios se probaron con dos cuentas reales del proyecto
+recordatorios-pm y con las pruebas unitarias del repositorio. En todos los
+casos el uid se toma de la sesion.
+
+ESCENARIO 1: CREACION SIN CONEXION Y REINTENTO AL VOLVER LA RED
+
+  Pasos:
+    1. Iniciar sesion con la cuenta A.
+    2. Activar modo avion (o deshabilitar wifi/datos).
+    3. Crear el recordatorio "Comprar pan".
+
+  Estado en Room:
+    - 1 fila con id UUID, ownerUid = uid(A), syncState = PENDING,
+      updatedAt = momento de creacion.
+
+  Estado en Firestore:
+    - No existe el documento. La operacion remota no se intento porque
+      NetworkMonitor informo que no hay red.
+
+  Resultado para el usuario:
+    - El recordatorio aparece de inmediato con la etiqueta "Pendiente de envio".
+    - El banner indica "Sin conexion" y el contador muestra 1 cambio pendiente.
+    - Al volver la red, el collector de conectividad dispara syncNow(), la fila
+      pasa a SYNCED y el documento aparece en users/{uid}/reminders.
+    - Prueba unitaria: "offline creation stays pending and syncs exactly once".
+
+ESCENARIO 2: RECUPERACION EN OTRO DISPOSITIVO (PULL)
+
+  Pasos:
+    1. En el dispositivo A, con sesion, crear "Cita medica" y esperar a que
+       figure como sincronizado.
+    2. En el dispositivo B (o tras borrar datos locales), iniciar sesion con
+       la misma cuenta.
+
+  Estado en Room del dispositivo B:
+    - Al iniciar sesion se ejecuta deleteAllExcept(uid) (no hay filas).
+    - El pull importa el documento con el mismo id y lo guarda como SYNCED.
+
+  Estado en Firestore:
+    - El documento ya existia en users/{uid}/reminders/{id}.
+
+  Resultado para el usuario:
+    - El recordatorio aparece en B sin haberlo creado alli.
+    - Si B estaba sin red, la lista local queda vacia hasta recuperar la
+      conexion y el banner lo explica; no se pierde nada.
+    - Prueba unitaria: "pull imports a reminder created on another device".
+
+ESCENARIO 3: MODIFICACION Y CONFLICTO ENTRE DOS DISPOSITIVOS (LWW)
+
+  Pasos:
+    1. El dispositivo A edita el titulo a las 10:00 (updatedAt = t1) y
+       sincroniza.
+    2. El dispositivo B habia editado el mismo registro a las 09:59
+       (updatedAt = t2 < t1) y luego sincroniza.
+
+  Estado en Room:
+    - B recibe la version de A en el pull porque t1 >= t2; la fila local
+      pendiente mas vieja se descarta.
+    - Si B edito despues de A (t2 > t1), conserva su cambio, lo envia y A lo
+      recibe en su siguiente pull.
+
+  Estado en Firestore:
+    - Queda un unico documento con el updatedAt ganador. No hay copias
+      duplicadas porque el id es el mismo.
+
+  Resultado para el usuario:
+    - Ve la version mas reciente. No aparecen dos recordatorios iguales.
+    - Pruebas unitarias: "last write wins when the cloud copy is newer" y
+      "a newer local pending change wins and is pushed".
+
+ESCENARIO 4: BORRADO EN UN DISPOSITIVO Y PROPAGACION AL OTRO
+
+  Pasos:
+    1. A elimina "Comprar pan" (con o sin red).
+    2. A vuelve a tener red y sincroniza.
+    3. B sincroniza.
+
+  Estado en Room:
+    - En A: el registro se marca isDeleted = 1 y syncState = PENDING; la UI lo
+      oculta de inmediato. Tras el push exitoso se borra la fila.
+    - En B: la fila estaba SYNCED y deja de aparecer en el pull; se elimina
+      localmente.
+
+  Estado en Firestore:
+    - El documento se elimina con delete(). Si no existia, la operacion
+      tambien es exitosa (idempotente).
+
+  Resultado para el usuario:
+    - El recordatorio desaparece en ambos dispositivos.
+    - Si el borrado se hizo sin conexion, queda un tombstone hasta que la red
+      vuelva; no se pierde ni reaparece.
+    - Pruebas unitarias: "offline deletion keeps a tombstone until the cloud
+      confirms" y "a reminder deleted on another device disappears locally".
+
+ESCENARIO 5: REINTENTO TRAS ERROR SIN DUPLICAR
+
+  Pasos:
+    1. Crear un recordatorio.
+    2. Provocar un fallo de envio (sin red o rechazo temporal).
+    3. Pulsar Sync varias veces, incluido un reintento concurrente.
+
+  Estado en Room:
+    - La fila pasa a ERROR con syncError legible y sigue siendo la unica fila
+      de ese id.
+    - Tras el exito pasa a SYNCED con syncedAt.
+
+  Estado en Firestore:
+    - Un unico documento. El push usa set() sobre el mismo id.
+    - El contador de upserts de las pruebas es 1 aunque se sincronice dos veces.
+
+  Resultado para el usuario:
+    - El error se muestra en la tarjeta y en el detalle, sin perder el
+      recordatorio; al reintentar se sincroniza una sola vez.
+    - Pruebas unitarias: "a rejected push marks ERROR and the retry sends only
+      once" y "concurrent synchronizations never duplicate a document".
+
+ESCENARIO 6: SESION INVALIDA DURANTE LA SINCRONIZACION
+
+  Pasos:
+    1. El token se revoca o la cuenta se deshabilita mientras la app esta
+       abierta.
+    2. Se dispara una sincronizacion.
+
+  Estado en Room:
+    - Los datos locales se conservan hasta que el usuario vuelve a iniciar
+      sesion; al cerrar sesion por invalidez se ejecuta deleteAll().
+
+  Estado en Firestore:
+    - No se modifica nada: la operacion se rechaza con UNAUTHENTICATED/403.
+
+  Resultado para el usuario:
+    - La app pasa a SessionExpired y muestra el aviso en la pantalla de acceso.
+    - No se muestran datos de otra cuenta.
+    - Prueba unitaria: "an invalid session from the cloud invalidates the
+      session".
+
+================================================================================
+9. RESULTADOS DE LAS PRUEBAS
+================================================================================
+
+9.1 PRUEBAS UNITARIAS
+
+  Comando:
+
+    .\gradlew.bat :app:testDebugUnitTest --console=plain
+
+  Resultado: BUILD SUCCESSFUL - 38 pruebas, 0 fallos.
+
+  | Clase                                | Pruebas | Que verifica                |
+  |--------------------------------------|---------|-----------------------------|
+  | ReminderMappersTest                  | 10      | Entity/Domain/Cloud, enums  |
+  |                                      |         | invalidos, documento ajeno, |
+  |                                      |         | id incoherente, ownerUid.   |
+  | OfflineFirstReminderRepositoryTest   | 16      | Sesion, aislamiento,        |
+  |                                      |         | offline, reintentos, pull,  |
+  |                                      |         | LWW, tombstones, errores,   |
+  |                                      |         | concurrencia.               |
+  | AuthValidationTest                   | 7       | Correo, contrasena,         |
+  |                                      |         | confirmacion, normalizacion.|
+  | UserPreferencesMappingTest           | 4       | Valores por defecto, validos|
+  |                                      |         | e invalidos.                |
+  | ExampleUnitTest                      | 1       | Plantilla del proyecto.     |
+
+  Las pruebas usan dobles en memoria de Room, Firestore, NetworkMonitor y
+  SessionProvider (RepositoryFakes.kt). No necesitan credenciales ni emulador.
+
+9.2 PRUEBAS INSTRUMENTADAS (ROOM Y FLUJO DE INTERFAZ)
+
+  Comando:
+
+    $env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'
+    .\gradlew.bat :app:connectedDebugAndroidTest `
+      "-Pandroid.testInstrumentationRunnerArguments.testEmail=..." `
+      "-Pandroid.testInstrumentationRunnerArguments.testPassword=..." `
+      --console=plain
+
+  Dispositivo: emulador Medium_Phone (Android 16 / API 36), x86_64.
+
+  Resultado: 10 pruebas, 0 fallos, 0 omitidas (30.4 s la de interfaz).
+  Evidencia en evidencias/instrumented_tests.txt.
+
+  ReminderDaoTest verifica (8 pruebas):
+
+    1. Insercion y lectura por id y por uid.
+    2. Invisibilidad de filas de otra cuenta (observeVisible, getById,
+       countByOwner).
+    3. Filtros por prioridad y ocultamiento de tombstones.
+    4. Contador de pendientes que incluye ERROR.
+    5. updateSyncInfo guarda syncState y syncedAt.
+    6. updateSyncInfo con uid ajeno no modifica la fila.
+    7. deleteAllExcept conserva solo al dueno autenticado.
+    8. deleteAll deja la base vacia.
+
+  ExampleInstrumentedTest es la prueba de plantilla del proyecto (1).
+
+  ReminderOfflineUiTest ejecuta el flujo completo sobre la interfaz real de
+  Compose (1 prueba, 30.4 s):
+
+    1. Cierra cualquier sesion previa e inicia sesion con la cuenta de prueba
+       (credenciales recibidas por argumentos de instrumentacion; no estan en
+       el codigo y sin ellas la prueba se omite).
+    2. Ejecuta "svc data disable" y "svc wifi disable": el emulador queda sin
+       red por defecto (eth0). Se usa svc y no modo avion porque este emulador
+       mantiene la red movil con el modo avion activo.
+    3. Pulsa + y crea "prueba ui sin red" escribiendo en el campo real
+       (accion SetText de semantica, el mismo canal que usa un teclado).
+    4. Comprueba que la tarjeta queda con el chip de sincronizacion
+       "Pendiente de envio" y que aun no muestra "Sincronizado".
+    5. Reactiva datos y wifi, pulsa Sync y espera el chip "Sincronizado".
+    6. Verifica que hay exactamente 1 tarjeta con ese titulo (no se duplica)
+       y 0 pendientes de envio.
+    7. Abre el detalle, elimina el recordatorio, confirma el dialogo, pulsa
+       Sync y cierra sesion.
+
+  Limpieza comprobada por REST tras la ejecucion: en
+  users/5dtjLRia81ZpK5lix5IIYEFvRx82/reminders queda solo el documento
+  sembrado para la prueba de pull del APK release, no el de la prueba.
+
+  Nota: la primera version de la prueba fallaba solo en la asercion final
+  porque contaba la etiqueta "Pendiente" del estado de la tarea, no el estado
+  de sincronizacion. Se corrigio para usar "Pendiente de envio".
+
+9.3 PRUEBA DE ACCESO CRUZADO ENTRE DOS CUENTAS
+
+  Cuentas creadas en el proyecto recordatorios-pm:
+
+    A: pm.recordatorios.a@example.com  uid WeiD9hegDxSmh9K5npNJ5k826Cg1
+    B: pm.recordatorios.b@example.com  uid R5KqJwD9J3gHJYJu4Z58kGon4Ag1
+
+  Herramienta: tools/cross_account_check.ps1. Usa la API REST de Identity
+  Toolkit para obtener tokens y la API REST de Firestore para intentar las
+  operaciones. No imprime tokens ni contrasenas.
+
+  Resultado (evidencia en evidencias/cross_account_check.txt):
+
+    [OK] A crea un recordatorio propio ..................... 200
+    [OK] B intenta leer el arbol de A ...................... 403
+    [OK] B intenta escribir en el arbol de A ............... 403
+    [OK] A crea un documento con ownerUid de B ............. 403
+    [OK] B lee su propio arbol ............................. 200
+    [OK] A elimina su documento de prueba .................. 200
+
+    RESULTADO: 6 comprobaciones correctas. Aislamiento verificado.
+
+  Mensaje del servidor en los tres intentos cruzados:
+
+    HTTP 403
+    {
+      "error": {
+        "code": 403,
+        "message": "Missing or insufficient permissions.",
+        "status": "PERMISSION_DENIED"
+      }
+    }
+
+  Ademas, un GET anonimo a users/sonda/reminders devuelve el mismo 403: sin
+  token no se lee nada.
+
+9.4 COMPILACION Y ARTEFACTOS
+
+  Comando:
+
+    $env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'
+    .\gradlew.bat :app:assembleRelease :app:bundleRelease --console=plain
+
+  Resultado: BUILD SUCCESSFUL in 3m 46s (58 tareas ejecutadas, incluye R8 y
+  lintVitalRelease). El APK y el AAB quedaron firmados con el keystore de
+  entrega.
+
+  Artefactos generados:
+
+    app\build\outputs\apk\release\app-release.apk
+      6,183,674 bytes (5.90 MB)
+    app\build\outputs\bundle\release\app-release.aab
+      8,466,886 bytes (8.07 MB)
+
+  Copias de entrega (junto a la carpeta del proyecto):
+
+    ..\API1ELIASESCALANTEPM_Actividad4-release.apk
+    ..\API1ELIASESCALANTEPM_Actividad4-release.aab
+
+  SHA-256:
+
+    APK  0DE8688B11F9EA76529262CBA44DF8923172370B30D9F452E53602DAECE12625
+    AAB  FD178201D38DD1ABC291BC75409A30A32BB8E02410D0BB83C5D9608B1BE10FB5
+
+  Verificacion de firma (apksigner de build-tools 36.1.0):
+
+    Verifies
+    Verified using v2 scheme (APK Signature Scheme v2): true
+    Number of signers: 1
+    Signer #1 certificate DN: CN=Elias Escalante, OU=PM, O=UNAH,
+      L=Tegucigalpa, ST=Francisco Morazan, C=HN
+    Signer #1 key algorithm: RSA
+    Signer #1 key size (bits): 2048
+    Signer #1 certificate SHA-256:
+      a4f271891c9f48f1c6394fd063fd4a8138f810e9f7e4100268717f1d9da35db5
+
+    No se usan v1 (JAR), v3 ni v4: minSdk 24 acepta v2 y Android 7+ lo valida.
+    El AAB se firma con el mismo keystore (signReleaseBundle).
+
+  Manifiesto del APK (aapt2 dump badging):
+
+    package: name='com.example.api1_eliasescalante_pm'
+    versionCode='4'  versionName='4.0'
+    minSdkVersion:'24'  targetSdkVersion:'37'  compileSdkVersion='37'
+    application-label:'API1- ELIAS ESCALANTE - PM'
+
+  La salida completa de apksigner, aapt2 y los hashes esta en
+  evidencias/release_verificacion.txt.
+
+9.5 INSTALACION Y PRUEBA DEL APK RELEASE
+
+  Instalacion limpia en el emulador Medium_Phone (Android 16 / API 36):
+
+    adb uninstall com.example.api1_eliasescalante_pm
+    adb install -r ..\API1ELIASESCALANTEPM_Actividad4-release.apk
+
+  dumpsys package confirma versionCode=4, versionName=4.0,
+  firstInstallTime=2026-11-15 22:09:45 y pkgFlags=[ HAS_CODE
+  ALLOW_CLEAR_USER_DATA ].
+
+  Pruebas ejecutadas sobre el APK release:
+
+  1. Registro desde la interfaz. Se creo la cuenta C
+     pm.recordatorios.c@example.com (uid 5dtjLRia81ZpK5lix5IIYEFvRx82)
+     directamente en el APK release. Firebase Authentication creo el usuario
+     y la app entro al listado.
+
+  2. Reapertura con sesion activa:
+       adb shell am force-stop com.example.api1_eliasescalante_pm
+       adb shell am start -n com.example.api1_eliasescalante_pm/.MainActivity
+     La app restauro la sesion y entro directo al listado.
+
+  3. Pull desde Firestore. Se sembro un documento para C con la API REST
+     (id 26878070-8636-4ff1-9386-1009b49157f1, HEALTH/HIGH/PENDING, creado
+     desde "otro equipo"). Al pulsar Sync la app mostro
+     "0 enviados - 1 recibidos" y la tarjeta quedo en "Sincronizado".
+
+  4. Detalle compartido. La pantalla de detalle mostro el id
+     26878070-8636-4ff1-9386-1009b49157f1 y el uid
+     5dtjLRia81ZpK5lix5IIYEFvRx82: el mismo identificador que usa Room como
+     clave primaria y Firestore como id de documento.
+
+  5. Cierre de sesion desde Ajustes. El dialogo advierte que se borra la copia
+     local; al confirmar se vuelve a la pantalla de acceso.
+
+  6. Aislamiento entre cuentas en el release. Con la sesion de C cerrada se
+     inicio sesion con B (R5KqJwD9J3gHJYJu4Z58kGon4Ag1). La lista aparecio
+     vacia ("No hay recordatorios para mostrar") y Ajustes mostro la cuenta B:
+     no se filtro ningun dato de C.
+
+  7. Retorno a C. Al iniciar sesion de nuevo con C la app volvio a recibir el
+     documento ("0 enviados - 1 recibidos") y reaparecio en la lista. Los datos
+     siguen en Firestore y se recuperan en cualquier instalacion.
+
+  8. Flujo offline automatizado. La prueba ReminderOfflineUiTest recorre
+     creacion sin red -> Pendiente -> reconexion -> Sincronizado -> borrado
+     sobre la interfaz real de Compose (ver 9.2).
+
+  9. Limite de la automatizacion por adb. En este emulador
+     `adb shell input text` no inserta texto en los campos de Crear/Detalle:
+     los eventos llegan y el foco es correcto, pero Compose no los aplica a
+     esos campos. Por eso el flujo de creacion se automatiza con la accion
+     SetText de semantica (que usa el mismo canal que un teclado) y no con
+     keyevents. La validacion manual de escritura queda descrita en 9.6.
+
+9.6 PROTOCOLO DE PRUEBA MANUAL EN DISPOSITIVO
+
+  Las pruebas automaticas cubren la logica y las reglas. Estas pruebas
+  complementan la validacion visual en el emulador:
+
+  1. Instalar el APK release y abrirlo.
+  2. Registrarse con una cuenta nueva; verificar el indicador "Creando cuenta".
+  3. Cerrar y reabrir la app: debe entrar directo al listado (sesion activa).
+  4. Crear, editar, completar y eliminar recordatorios con red.
+  5. Activar modo avion, crear uno nuevo: debe quedar Pendiente.
+  6. Desactivar modo avion: debe pasar a Sincronizado sin duplicarse.
+  7. Revisar en la consola de Firestore el documento y su ownerUid.
+  8. Cerrar sesion: la lista debe quedar vacia y aparecer el login.
+  9. Iniciar sesion con otra cuenta: no debe verse ningun dato de la anterior.
+ 10. Intentar leer el arbol de la primera cuenta con la segunda (script):
+     debe responder 403.
+
+================================================================================
+10. RELEASE: VERSION, FIRMA Y ARTEFACTOS
+================================================================================
+
+  Variante            release
+  versionCode         4
+  versionName         4.0
+  applicationId       com.example.api1_eliasescalante_pm
+  minSdk              24
+  targetSdk / compileSdk 37
+  APP_ENV             production
+  CLOUD_LOGGING       false
+  Firma               keystore propio (RSA 2048, validez 10000 dias)
+  Ubicacion keystore  ..\API1ELIASESCALANTEPM-signing\release-keystore.jks
+  Credenciales        ..\API1ELIASESCALANTEPM-signing\keystore.properties
+  Fecha de compilacion 15/11/2026
+
+  El keystore y las contrasenas no estan dentro del proyecto. app/build.gradle.kts
+  busca keystore.properties en este orden:
+
+    1. -PSIGNING_PROPERTIES_FILE=...
+    2. variable de entorno RELEASE_SIGNING_PROPERTIES
+    3. ..\API1ELIASESCALANTEPM-signing\keystore.properties
+    4. keystore.properties en la raiz (ignorado por git)
+
+  Si no lo encuentra, la variante release se genera sin firmar: el build no se
+  cae, pero el artefacto no sirve para entregar.
+
+  Verificacion:
+
+    apksigner verify --verbose --print-certs app-release.apk
+    aapt2 dump badging app-release.apk
+
+  Resultado: "Verifies" con esquema v2, un firmante RSA 2048 y el certificado
+  CN=Elias Escalante, OU=PM, O=UNAH, L=Tegucigalpa, ST=Francisco Morazan, C=HN.
+  El APK declara versionCode 4, versionName 4.0, minSdk 24 y targetSdk 37.
+  Evidencia completa en evidencias/release_verificacion.txt y detalle de los
+  tamanos/hashes en la seccion 9.4.
+
+================================================================================
+11. INSTRUCCIONES PARA CONFIGURAR, COMPILAR Y EJECUTAR
+================================================================================
+
+11.1 REQUISITOS
+
+  - Android Studio reciente con JDK incluido (JBR).
+  - Android SDK 37 y build-tools 37.0.0.
+  - Emulador o dispositivo con Android 7.0 (API 24) o superior.
+  - Cuenta de Google con acceso al proyecto recordatorios-pm.
+
+11.2 CONFIGURACION DEL PROYECTO FIREBASE
+
+  1. Authentication -> Sign-in method -> Correo electronico/Contrasena:
+     Habilitar.
+  2. Firestore Database -> Crear base de datos en modo nativo.
+  3. Firestore Database -> Reglas -> pegar firestore.rules -> Publicar.
+  4. Descargar google-services.json y guardarlo en app/.
+
+11.3 COMPILACION
+
+  $env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'
+
+  .\gradlew.bat :app:assembleDebug --console=plain
+  .\gradlew.bat :app:testDebugUnitTest --console=plain
+  .\gradlew.bat :app:connectedDebugAndroidTest --console=plain
+  .\gradlew.bat :app:assembleRelease :app:bundleRelease --console=plain
+
+11.4 INSTALACION
+
+  $adb = "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe"
+  & $adb install -r app\build\outputs\apk\release\app-release.apk
+  & $adb shell am start -n com.example.api1_eliasescalante_pm/.MainActivity
+
+11.5 PRUEBA DE ACCESO CRUZADO
+
+  $key = (Get-Content app\google-services.json -Raw |
+          ConvertFrom-Json).client[0].api_key[0].current_key
+  .\tools\cross_account_check.ps1 -ProjectId recordatorios-pm -ApiKey $key `
+    -EmailA pm.recordatorios.a@example.com -PasswordA '...' `
+    -EmailB pm.recordatorios.b@example.com -PasswordB '...'
+
+================================================================================
+12. LIMITACIONES CONOCIDAS Y MEJORAS FUTURAS
+================================================================================
+
+  - No hay verificacion de correo ni recuperacion de contrasena.
+  - El pull descarga todos los recordatorios del usuario, sin paginacion.
+  - La sincronizacion es por eventos (arranque, red, boton, escritura), no con
+    listeners en tiempo real de Firestore.
+  - Las preferencias de UI son locales y no se sincronizan.
+  - La resolucion de conflictos es last-write-wins por updatedAt; no hay merge
+    de campos.
+  - `adb shell input text` no inserta texto en los campos de Crear/Detalle de
+    Compose en este emulador Android 16: los eventos llegan y el foco es
+    correcto, pero el campo no los aplica. La prueba de flujo usa la accion
+    SetText de semantica (mismo canal que un teclado) por eso; el protocolo
+    manual de escritura esta en 9.6.
+  - Las pruebas de interfaz requieren red y una cuenta semilla; sin los
+    argumentos testEmail/testPassword se omiten.
+
+  Mejoras posibles:
+
+  - Listeners de Firestore con cache offline para recibir cambios en vivo.
+  - Paginacion y consultas por rango de fecha.
+  - Verificacion de correo y restablecimiento de contrasena.
+  - Pruebas end-to-end contra Firebase Emulator Suite en CI.
+  - Firma con Play App Signing al publicar.
+
+================================================================================
+13. CONCLUSION
+================================================================================
+
+La version 4 cumple los objetivos de la actividad:
+
+  - Firebase Authentication identifica al usuario y provee el uid.
+  - Cloud Firestore guarda una copia por cuenta en users/{uid}/reminders.
+  - Room sigue siendo la fuente de verdad local y permite trabajar sin red.
+  - El repositorio coordina ambos almacenes con un algoritmo pull/push
+    serializado, ids estables y tombstones.
+  - El aislamiento se apoya en reglas del servidor, no en la interfaz, y se
+    demostro con dos cuentas reales: 6/6 intentos dieron el resultado esperado.
+  - El cierre de sesion deja el dispositivo sin recordatorios y la interfaz
+    no puede conservar datos de la cuenta anterior.
+  - El release esta firmado con credenciales fuera del repositorio y se
+    entrega como APK instalable y AAB.
+
+La aplicacion queda lista para usarse con varias cuentas en el mismo
+dispositivo, recuperar datos en otro equipo y seguir funcionando sin conexion.
+
+================================================================================
+14. ANEXO: MAPA DE ARCHIVOS Y ENTREGABLES
+================================================================================
+
+  Proyecto:
+    API1ELIASESCALANTEPM/
+      app/src/main/java/...        Codigo fuente (dominio, datos, UI, VM)
+      app/src/test/...             38 pruebas unitarias
+      app/src/androidTest/...      10 pruebas instrumentadas (Room + flujo UI)
+      app/build.gradle.kts         Version 4.0, firma, Firebase
+      gradle/libs.versions.toml    Dependencias (BOM 34.12.0)
+      firestore.rules              Reglas publicadas
+      FIREBASE_SETUP.md            Configuracion de Firebase
+      RELEASE_SIGNING.md           Firma y artefactos
+      README.md                    Guia rapida
+      INFORME_ACTIVIDAD4.txt       Este informe
+      evidencias/cross_account_check.txt  Evidencia 6/6
+      evidencias/release_verificacion.txt Firma, badging y SHA-256
+      evidencias/instrumented_tests.txt   Resultado de las 10 pruebas
+      tools/cross_account_check.ps1       Prueba de aislamiento
+      tools/ui_probe.ps1                  Inspeccion/tap/type por adb
+      tools/package_delivery.ps1          Carpeta y ZIP de entrega
+
+  Artefactos:
+    API1ELIASESCALANTEPM_Actividad4-release.apk
+    API1ELIASESCALANTEPM_Actividad4-release.aab
+
+  Entrega comprimida (mismo nivel que el proyecto):
+    API1ELIASESCALANTEPM_Actividad4_Entrega.zip (13.62 MB, 123 entradas)
+      API1ELIASESCALANTEPM_Actividad4_Entrega/
+        proyecto completo (fuentes, Gradle, reglas, informes, README)
+        app/google-services.json
+        evidencias/ (3 archivos)
+        API1ELIASESCALANTEPM_Actividad4-release.apk
+        API1ELIASESCALANTEPM_Actividad4-release.aab
+
+    Verificado: no incluye build/, .gradle/, .idea/, .kotlin/, .git/,
+    local.properties, *.log, *.jks, *.keystore ni keystore.properties.
+
+  Fuera de la entrega:
+    release-keystore.jks
+    keystore.properties
+    local.properties
+    app/google-services.json se incluye para que el build funcione, pero no se
+    versiona en git.
+
+================================================================================
+FIN DEL INFORME
+================================================================================

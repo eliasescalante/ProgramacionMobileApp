@@ -1,0 +1,29 @@
+﻿=== Pruebas instrumentadas (connectedDebugAndroidTest) ===
+Fecha: 2026-11-15 19:46:13
+Dispositivo: Medium_Phone(AVD) - Android 16 (API 36)
+Comando: .\gradlew.bat :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.testEmail=... -Pandroid.testInstrumentationRunnerArguments.testPassword=...
+
+com.example.api1_eliasescalante_pm.ExampleInstrumentedTest: tests=1 failures=0 errors=0 skipped=0
+    - useAppContext (0.0 s)
+com.example.api1_eliasescalante_pm.ReminderOfflineUiTest: tests=1 failures=0 errors=0 skipped=0
+    - offlineCreationStaysPendingAndSyncsOnceWhenNetworkReturns (30.4 s)
+com.example.api1_eliasescalante_pm.data.local.ReminderDaoTest: tests=8 failures=0 errors=0 skipped=0
+    - updateSyncInfoOfAnotherOwnerDoesNotModifyRow (0.0 s)
+    - insertAndReadById (0.1 s)
+    - pendingCountIncludesErrorRows (0.0 s)
+    - visibleFlowHidesTombstonesAndFiltersByPriority (0.2 s)
+    - updateSyncInfoStoresSyncedAtAndState (0.3 s)
+    - deleteAllLeavesDatabaseEmpty (0.4 s)
+    - deleteAllExceptKeepsOnlyAuthenticatedOwner (0.2 s)
+    - rowsAreInvisibleToAnotherOwner (0.7 s)
+
+TOTAL: 10 pruebas, 0 fallos, 0 omitidas.
+
+ReminderOfflineUiTest (flujo sobre Compose):
+  1. Login con cuenta de prueba (credenciales por argumento).
+  2. svc data disable + svc wifi disable: sin red.
+  3. Crea un recordatorio desde la UI (Room primero).
+  4. Verifica chip "Pendiente de envío" y ausencia de "Sincronizado".
+  5. svc data enable + svc wifi enable; pulsa Sync.
+  6. Espera "Sincronizado", comprueba 1 sola tarjeta y 0 pendientes.
+  7. Elimina el recordatorio, sincroniza y cierra sesión.

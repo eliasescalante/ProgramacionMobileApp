@@ -17,12 +17,20 @@ import org.junit.runner.RunWith
 /**
  * Prueba de integración del DAO contra una base Room en memoria.
  * Requiere un emulador o dispositivo conectado (prueba instrumentada).
+ *
+ * Además de la persistencia básica, verifica la primera barrera de
+ * aislamiento multiusuario: todas las consultas exigen `ownerUid`, por lo que
+ * dos cuentas que compartan archivo de base de datos nunca ven las filas de la
+ * otra.
  */
 @RunWith(AndroidJUnit4::class)
 class ReminderDaoTest {
 
     private lateinit var database: AppDatabase
     private lateinit var dao: ReminderDao
+
+    private val uidA = "uid-cuenta-a"
+    private val uidB = "uid-cuenta-b"
 
     @Before
     fun setUp() {
@@ -40,67 +48,119 @@ class ReminderDaoTest {
 
     @Test
     fun insertAndReadById() = runBlocking {
-        dao.upsert(entity(id = "a", title = "Primero"))
+        dao.upsert(entity(ownerUid = uidA, id = "a", title = "Primero"))
 
-        assertEquals("Primero", dao.getById("a")?.title)
-        assertNull(dao.getById("inexistente"))
+        assertEquals("Primero", dao.getById(uidA, "a")?.title)
+        assertNull(dao.getById(uidA, "inexistente"))
+    }
+
+    @Test
+    fun rowsAreInvisibleToAnotherOwner() = runBlocking {
+        dao.upsert(entity(ownerUid = uidA, id = "a", title = "De A"))
+
+        assertEquals(1, dao.observeVisible(uidA).first().size)
+        assertEquals(0, dao.observeVisible(uidB).first().size)
+        assertNull(dao.getById(uidB, "a"))
+        assertEquals(0, dao.countByOwner(uidB))
     }
 
     @Test
     fun visibleFlowHidesTombstonesAndFiltersByPriority() = runBlocking {
-        dao.upsert(entity(id = "alta", priority = "HIGH"))
-        dao.upsert(entity(id = "baja", priority = "LOW"))
+        dao.upsert(entity(ownerUid = uidA, id = "alta", priority = "HIGH"))
+        dao.upsert(entity(ownerUid = uidA, id = "baja", priority = "LOW"))
 
-        assertEquals(2, dao.observeVisible().first().size)
+        assertEquals(2, dao.observeVisible(uidA).first().size)
         assertEquals(
             listOf("alta"),
-            dao.observeByPriority("HIGH").first().map { it.id }
+            dao.observeByPriority(uidA, "HIGH").first().map { it.id }
         )
 
-        dao.markDeleted(id = "baja", syncState = "PENDING", updatedAt = 10L)
+        dao.markDeleted(ownerUid = uidA, id = "baja", syncState = "PENDING", updatedAt = 10L)
 
         assertEquals(
             listOf("alta"),
-            dao.observeVisible().first().map { it.id }
+            dao.observeVisible(uidA).first().map { it.id }
         )
     }
 
     @Test
     fun pendingCountIncludesErrorRows() = runBlocking {
-        dao.upsert(entity(id = "pending", syncState = "PENDING"))
-        dao.upsert(entity(id = "error", syncState = "ERROR"))
-        dao.upsert(entity(id = "synced", syncState = "SYNCED"))
+        dao.upsert(entity(ownerUid = uidA, id = "pending", syncState = "PENDING"))
+        dao.upsert(entity(ownerUid = uidA, id = "error", syncState = "ERROR"))
+        dao.upsert(entity(ownerUid = uidA, id = "synced", syncState = "SYNCED"))
 
-        assertEquals(2, dao.observePendingCount().first())
+        assertEquals(2, dao.observePendingCount(uidA).first())
 
-        val pending = dao.getPendingForSync().map { it.id }.toSet()
+        val pending = dao.getPendingForSync(uidA).map { it.id }.toSet()
         assertTrue(pending.containsAll(setOf("pending", "error")))
     }
 
     @Test
-    fun updateSyncInfoStoresRemoteId() = runBlocking {
-        dao.upsert(entity(id = "a", syncState = "PENDING"))
+    fun updateSyncInfoStoresSyncedAtAndState() = runBlocking {
+        dao.upsert(entity(ownerUid = uidA, id = "a", syncState = "PENDING"))
 
         dao.updateSyncInfo(
+            ownerUid = uidA,
             id = "a",
             syncState = "SYNCED",
             syncError = null,
-            remoteId = 99L
+            syncedAt = 1234L
         )
 
-        val stored = dao.getById("a")
+        val stored = dao.getById(uidA, "a")
         assertEquals("SYNCED", stored?.syncState)
-        assertEquals(99L, stored?.remoteId)
-        assertEquals("a", dao.getByRemoteId(99L)?.id)
+        assertEquals(1234L, stored?.syncedAt)
+        assertEquals("a", stored?.id)
+    }
+
+    @Test
+    fun updateSyncInfoOfAnotherOwnerDoesNotModifyRow() = runBlocking {
+        dao.upsert(entity(ownerUid = uidA, id = "a", syncState = "PENDING"))
+
+        dao.updateSyncInfo(
+            ownerUid = uidB,
+            id = "a",
+            syncState = "SYNCED",
+            syncError = null,
+            syncedAt = 1234L
+        )
+
+        val stored = dao.getById(uidA, "a")
+        assertEquals("PENDING", stored?.syncState)
+        assertNull(stored?.syncedAt)
+    }
+
+    @Test
+    fun deleteAllExceptKeepsOnlyAuthenticatedOwner() = runBlocking {
+        dao.upsert(entity(ownerUid = uidA, id = "a"))
+        dao.upsert(entity(ownerUid = uidB, id = "b"))
+
+        dao.deleteAllExcept(uidA)
+
+        assertEquals(listOf("a"), dao.getAllForUser(uidA).map { it.id })
+        assertEquals(0, dao.countByOwner(uidB))
+    }
+
+    @Test
+    fun deleteAllLeavesDatabaseEmpty() = runBlocking {
+        dao.upsert(entity(ownerUid = uidA, id = "a"))
+        dao.upsert(entity(ownerUid = uidB, id = "b"))
+
+        dao.deleteAll()
+
+        assertEquals(0, dao.countByOwner(uidA))
+        assertEquals(0, dao.countByOwner(uidB))
     }
 
     private fun entity(
+        ownerUid: String,
         id: String,
         title: String = "Recordatorio",
         priority: String = "MEDIUM",
         syncState: String = "PENDING"
     ) = ReminderEntity(
         id = id,
+        ownerUid = ownerUid,
         title = title,
         category = "OTHER",
         priority = priority,

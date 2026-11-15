@@ -13,8 +13,10 @@ import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Punto de entrada único de la capa de datos para la presentación.
+ *
  * Room es la fuente de verdad para [reminders]; DataStore lo es para
- * [preferences]. La interfaz nunca ve entidades, DTO ni el DAO.
+ * [preferences]; Firestore es la copia remota. La interfaz nunca ve entidades,
+ * documentos de Firestore, DAO ni excepciones del proveedor.
  */
 interface ReminderRepository {
 
@@ -25,7 +27,10 @@ interface ReminderRepository {
 
     fun observeReminder(id: String): Flow<Reminder?>
 
-    /** Registra la observación de conectividad y el primer intento de sync. */
+    /**
+     * Registra la observación de sesión y conectividad, y dispara la primera
+     * sincronización de la cuenta autenticada.
+     */
     fun start()
 
     suspend fun setThemeMode(mode: ThemeMode)
@@ -39,8 +44,9 @@ interface ReminderRepository {
     suspend fun deleteReminder(id: String): Result<Unit>
     suspend fun setStatus(id: String, status: ReminderStatus): Result<Unit>
 
-    /** Intenta enviar pendientes y traer cambios remotos. Es serializada. */
+    /** Envía pendientes y trae cambios remotos. Está serializada. */
     suspend fun syncNow(): SyncStatus
 
+    /** Borra la copia local de la cuenta actual. Firestore no se modifica. */
     suspend fun clearLocalData(): Result<Unit>
 }

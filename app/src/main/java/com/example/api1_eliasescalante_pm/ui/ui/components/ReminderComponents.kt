@@ -56,6 +56,7 @@ fun SyncStatusBanner(
 
     val containerColor = when (syncStatus) {
         is SyncStatus.Error -> MaterialTheme.colorScheme.errorContainer
+        is SyncStatus.NoSession -> MaterialTheme.colorScheme.errorContainer
         is SyncStatus.Offline -> MaterialTheme.colorScheme.tertiaryContainer
         is SyncStatus.Success -> MaterialTheme.colorScheme.secondaryContainer
         else -> MaterialTheme.colorScheme.surfaceVariant
@@ -99,6 +100,19 @@ fun SyncStatusBanner(
                     TextButton(onClick = onSync) { Text("Reintentar ahora") }
                 }
 
+                is SyncStatus.NoSession -> {
+                    Text(
+                        text = "Sin sesión",
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                    Text(
+                        text = syncStatus.message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                }
+
                 is SyncStatus.Success -> {
                     Text(
                         text = "Sincronización completada",
@@ -114,7 +128,7 @@ fun SyncStatusBanner(
                 }
 
                 SyncStatus.Syncing -> {
-                    Text("Sincronizando con el servicio remoto…")
+                    Text("Sincronizando con Firestore…")
                     Spacer(modifier = Modifier.height(4.dp))
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }

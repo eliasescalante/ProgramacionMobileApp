@@ -1,16 +1,16 @@
 package com.example.api1_eliasescalante_pm.data.repository
 
+import com.example.api1_eliasescalante_pm.data.cloud.CloudResult
+import com.example.api1_eliasescalante_pm.data.cloud.CloudReminder
+import com.example.api1_eliasescalante_pm.data.cloud.ReminderCloudDataSource
 import com.example.api1_eliasescalante_pm.data.local.ReminderDao
+import com.example.api1_eliasescalante_pm.data.local.ReminderEntity
+import com.example.api1_eliasescalante_pm.data.mapper.toCloud
 import com.example.api1_eliasescalante_pm.data.mapper.toDomain
 import com.example.api1_eliasescalante_pm.data.mapper.toEntity
-import com.example.api1_eliasescalante_pm.data.mapper.toDomainOrNull
-import com.example.api1_eliasescalante_pm.data.mapper.toRemoteRequest
 import com.example.api1_eliasescalante_pm.data.network.NetworkMonitor
 import com.example.api1_eliasescalante_pm.data.preferences.UserPreferencesDataSource
-import com.example.api1_eliasescalante_pm.data.remote.ApiResult
-import com.example.api1_eliasescalante_pm.data.remote.ReminderRemoteDataSource
-import com.example.api1_eliasescalante_pm.data.remote.dto.RemoteReminderDto
-import com.example.api1_eliasescalante_pm.data.remote.dto.RemoteReminderRequest
+import com.example.api1_eliasescalante_pm.domain.model.AuthState
 import com.example.api1_eliasescalante_pm.domain.model.PriorityFilter
 import com.example.api1_eliasescalante_pm.domain.model.Reminder
 import com.example.api1_eliasescalante_pm.domain.model.ReminderDraft
@@ -30,6 +30,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -39,20 +41,24 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Implementación local-first:
+ * Repositorio local-first con Firebase como copia remota.
  *
- * 1. Toda escritura va primero a Room.
- * 2. La operación se marca como PENDING (o ERROR si falla el envío).
- * 3. La sincronización se serializa con un [Mutex] para evitar envíos
- *    duplicados cuando varios eventos detectan conectividad a la vez.
- * 4. La interfaz observa únicamente flujos de Room, por lo que sigue
- *    funcionando sin red.
+ * Principios:
+ *  1. Toda escritura va primero a Room y queda PENDING, con el uid del dueño.
+ *  2. La interfaz observa únicamente flujos de Room; funciona sin red.
+ *  3. La sincronización se serializa con un [Mutex] y hace pull antes del push.
+ *  4. El id del registro es el mismo en Room y en Firestore, por lo que un
+ *     reintento hace `set` sobre el mismo documento y no puede duplicar.
+ *  5. El uid se toma siempre de la sesión autenticada; ninguna consulta puede
+ *     pedir datos de otra cuenta.
  */
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class OfflineFirstReminderRepository(
     private val dao: ReminderDao,
     private val preferencesRepository: UserPreferencesDataSource,
-    private val remoteDataSource: ReminderRemoteDataSource,
+    private val cloudDataSource: ReminderCloudDataSource,
     private val networkMonitor: NetworkMonitor,
+    private val sessionProvider: SessionProvider,
     private val appScope: CoroutineScope,
     private val clock: () -> Long = System::currentTimeMillis
 ) : ReminderRepository {
@@ -65,33 +71,76 @@ class OfflineFirstReminderRepository(
 
     override val preferences: Flow<UserPreferences> = preferencesRepository.preferences
 
+    /**
+     * La lista se reconstruye cuando cambia la cuenta. Al cerrar sesión el
+     * flujo emite una lista vacía: la interfaz no puede conservar datos de la
+     * sesión anterior aunque el proceso siga vivo.
+     */
     override val reminders: Flow<List<Reminder>> =
-        combine(dao.observeVisible(), preferencesRepository.preferences) { entities, prefs ->
-            entities.asSequence()
-                .map { it.toDomain() }
-                .filter { prefs.showCompleted || it.status != ReminderStatus.COMPLETED }
-                .filter {
-                    prefs.priorityFilter == PriorityFilter.ALL ||
-                        it.priority.storageValue == prefs.priorityFilter.storageValue
-                }
-                .sortedWith(comparatorFor(prefs))
-                .toList()
+        sessionProvider.authState.flatMapLatest { state ->
+            val uid = state.signedInUid()
+            if (uid == null) {
+                flowOf(emptyList())
+            } else {
+                combine(
+                    dao.observeVisible(uid),
+                    preferencesRepository.preferences
+                ) { entities, prefs -> applyPreferences(entities, prefs) }
+            }
         }.distinctUntilChanged()
 
-    override val pendingCount: Flow<Int> = dao.observePendingCount()
+    override val pendingCount: Flow<Int> =
+        sessionProvider.authState.flatMapLatest { state ->
+            val uid = state.signedInUid()
+            if (uid == null) flowOf(0) else dao.observePendingCount(uid)
+        }.distinctUntilChanged()
 
     override fun observeReminder(id: String): Flow<Reminder?> =
-        dao.observeById(id).map { entity ->
-            entity?.takeUnless { it.isDeleted }?.toDomain()
+        sessionProvider.authState.flatMapLatest { state ->
+            val uid = state.signedInUid()
+            if (uid == null) {
+                flowOf(null)
+            } else {
+                dao.observeById(uid, id).map { entity ->
+                    entity?.takeUnless { it.isDeleted }?.toDomain()
+                }
+            }
         }
 
     override fun start() {
         if (!started.compareAndSet(false, true)) return
 
+        // 1) Reacción a la sesión: al entrar se purgan datos de otras cuentas
+        //    y se sincroniza; al salir se borra la copia local.
+        appScope.launch {
+            sessionProvider.authState.collect { state ->
+                when (state) {
+                    is AuthState.SignedIn -> {
+                        dao.deleteAllExcept(state.user.uid)
+                        // La sincronización se lanza aparte: el colector de
+                        // sesión no debe quedar bloqueado esperando a la red,
+                        // porque un logout durante la sincronización tiene que
+                        // limpiar Room igualmente.
+                        appScope.launch { syncNow() }
+                    }
+
+                    AuthState.SignedOut,
+                    is AuthState.SessionExpired -> {
+                        dao.deleteAll()
+                        _syncStatus.value = SyncStatus.Idle
+                    }
+
+                    AuthState.Restoring -> Unit
+                }
+            }
+        }
+
+        // 2) Reacción a la conectividad: al volver la red se reintenta la cola.
         appScope.launch {
             networkMonitor.isOnlineFlow.collect { online ->
+                val uid = sessionProvider.currentUid() ?: return@collect
                 if (online) {
-                    syncNow()
+                    appScope.launch { syncNow() }
                 } else {
                     _syncStatus.value = SyncStatus.Offline()
                 }
@@ -124,10 +173,12 @@ class OfflineFirstReminderRepository(
 
     override suspend fun createReminder(draft: ReminderDraft): Result<Reminder> =
         runCatching {
+            val uid = requireUid()
             require(draft.title.isNotBlank()) { "El título no puede estar vacío." }
             val now = clock()
             val reminder = Reminder(
                 id = UUID.randomUUID().toString(),
+                ownerUid = uid,
                 title = draft.title.trim(),
                 description = draft.description?.trim()?.takeIf { it.isNotEmpty() },
                 category = draft.category,
@@ -148,12 +199,14 @@ class OfflineFirstReminderRepository(
 
     override suspend fun updateReminder(reminder: Reminder): Result<Unit> =
         runCatching {
+            val uid = requireUid()
             require(reminder.title.isNotBlank()) { "El título no puede estar vacío." }
-            val current = dao.getById(reminder.id)
+
+            val current = dao.getById(uid, reminder.id)
                 ?: error("El recordatorio ya no existe en la base local.")
 
             val updated = reminder.copy(
-                remoteId = current.remoteId,
+                ownerUid = uid,
                 syncState = SyncState.PENDING,
                 syncError = null,
                 createdAt = current.createdAt,
@@ -165,26 +218,26 @@ class OfflineFirstReminderRepository(
 
     override suspend fun deleteReminder(id: String): Result<Unit> =
         runCatching {
-            val current = dao.getById(id) ?: return@runCatching
+            val uid = requireUid()
+            val current = dao.getById(uid, id) ?: return@runCatching
 
-            if (current.remoteId == null) {
-                // Nunca llegó al servidor: se puede borrar físicamente.
-                dao.deleteById(id)
-            } else {
-                // Tombstone: se oculta de la UI y se elimina en el servidor
-                // en la próxima sincronización, incluso si no hay red ahora.
-                dao.markDeleted(
-                    id = id,
-                    syncState = SyncState.PENDING.storageValue,
-                    updatedAt = clock()
-                )
-            }
+            // Tombstone: se oculta de inmediato y la sincronización elimina el
+            // documento remoto. Si el documento no existe, el borrado remoto
+            // también es exitoso, por lo que el caso "nunca sincronizado" no
+            // necesita una rama distinta.
+            dao.markDeleted(
+                ownerUid = uid,
+                id = id,
+                syncState = SyncState.PENDING.storageValue,
+                updatedAt = clock()
+            )
             requestSync()
         }
 
     override suspend fun setStatus(id: String, status: ReminderStatus): Result<Unit> =
         runCatching {
-            val current = dao.getById(id) ?: return@runCatching
+            val uid = requireUid()
+            val current = dao.getById(uid, id) ?: return@runCatching
             if (current.status == status.storageValue) return@runCatching
 
             val updated = current.copy(
@@ -198,7 +251,8 @@ class OfflineFirstReminderRepository(
         }
 
     override suspend fun clearLocalData(): Result<Unit> = runCatching {
-        dao.deleteAll()
+        val uid = requireUid()
+        dao.deleteAllForUser(uid)
     }
 
     // -----------------------------------------------------------------------
@@ -206,20 +260,28 @@ class OfflineFirstReminderRepository(
     // -----------------------------------------------------------------------
 
     /**
-     * Un solo Mutex serializa todas las sincronizaciones. Si dos eventos
-     * (arranque, retorno de red, botón manual) coinciden, el segundo espera y
-     * encuentra la cola de pendientes vacía: no se reenvía nada.
+     * Un solo [Mutex] serializa todas las sincronizaciones. Si coinciden el
+     * arranque, el retorno de red y un botón manual, el segundo espera y
+     * encuentra la cola ya vacía: no se reenvía lo confirmado.
      */
     override suspend fun syncNow(): SyncStatus = withContext(Dispatchers.IO) {
+        val uid = sessionProvider.currentUid()
+            ?: return@withContext publish(SyncStatus.NoSession())
+
         if (!networkMonitor.isOnline()) {
             return@withContext publish(
                 SyncStatus.Offline(
-                    "Sin conexión. Los cambios quedaron guardados y se enviarán al recuperar la red."
+                    "Sin conexión. Los cambios quedaron guardados y se " +
+                        "enviarán al recuperar la red."
                 )
             )
         }
 
         syncMutex.withLock {
+            // La sesión pudo cambiar mientras se esperaba el mutex.
+            if (sessionProvider.currentUid() != uid) {
+                return@withLock publish(SyncStatus.NoSession())
+            }
             if (!networkMonitor.isOnline()) {
                 return@withLock publish(SyncStatus.Offline())
             }
@@ -230,22 +292,32 @@ class OfflineFirstReminderRepository(
             val errors = mutableListOf<String>()
 
             try {
-                // 1) Pull primero: permite reconciliar una creación cuyo
-                //    response se perdió (mismo clientId en el body).
-                when (val pull = remoteDataSource.fetchReminders()) {
-                    is ApiResult.Success -> pulled = mergeRemote(pull.value)
-                    is ApiResult.NoConnection -> return@withLock publish(
-                        SyncStatus.Offline(pull.message)
-                    )
+                // 1) PULL: traer la copia remota y reconciliar contra Room.
+                when (val pull = cloudDataSource.fetchAll(uid)) {
+                    is CloudResult.Success -> {
+                        pulled = mergeCloud(uid, pull.value)
+                        removeDeletedRemotely(
+                            uid = uid,
+                            remoteIds = pull.value.map { it.id }.toSet()
+                        )
+                    }
 
-                    is ApiResult.Timeout -> errors += pull.message
-                    is ApiResult.ClientError -> errors += pull.message
-                    is ApiResult.ServerError -> errors += pull.message
-                    is ApiResult.UnknownError -> errors += pull.message
+                    is CloudResult.Unauthenticated -> {
+                        sessionProvider.invalidateSession(pull.message)
+                        return@withLock publish(SyncStatus.NoSession(pull.message))
+                    }
+
+                    is CloudResult.PermissionDenied ->
+                        return@withLock publish(SyncStatus.Error(pull.message, false))
+
+                    is CloudResult.Unavailable ->
+                        return@withLock publish(SyncStatus.Offline(pull.message))
+
+                    is CloudResult.Failure -> errors += pull.message
                 }
 
-                // 2) Push de la cola local, serializado.
-                val pending = dao.getPendingForSync()
+                // 2) PUSH: enviar únicamente filas pendientes o con error.
+                val pending = dao.getPendingForSync(uid)
                 for (entity in pending) {
                     if (!networkMonitor.isOnline()) {
                         return@withLock publish(
@@ -255,22 +327,24 @@ class OfflineFirstReminderRepository(
                             )
                         )
                     }
+                    if (sessionProvider.currentUid() != uid) {
+                        return@withLock publish(SyncStatus.NoSession())
+                    }
 
-                    when (val outcome = pushOne(entity)) {
+                    when (val outcome = pushOne(uid, entity)) {
                         is PushOutcome.Success -> pushed++
 
-                        is PushOutcome.NoConnection -> return@withLock publish(
-                            SyncStatus.Offline(outcome.message)
-                        )
+                        is PushOutcome.NoConnection ->
+                            return@withLock publish(SyncStatus.Offline(outcome.message))
+
+                        is PushOutcome.Unauthorized -> {
+                            sessionProvider.invalidateSession(outcome.message)
+                            return@withLock publish(SyncStatus.NoSession(outcome.message))
+                        }
 
                         is PushOutcome.Failure -> {
                             errors += outcome.message
-                            dao.updateSyncInfo(
-                                id = entity.id,
-                                syncState = SyncState.ERROR.storageValue,
-                                syncError = outcome.message,
-                                remoteId = entity.remoteId
-                            )
+                            markError(uid, entity.id, outcome.message)
                         }
                     }
                 }
@@ -281,8 +355,8 @@ class OfflineFirstReminderRepository(
                     SyncStatus.Error(errors.first(), recoverable = true)
                 }
                 publish(status)
-            } catch (exception: CancellationException) {
-                throw exception
+            } catch (cancellation: CancellationException) {
+                throw cancellation
             } catch (exception: Exception) {
                 publish(
                     SyncStatus.Error(
@@ -304,55 +378,37 @@ class OfflineFirstReminderRepository(
     }
 
     /**
-     * Fusiona lo recibido del servicio. Solo importa registros con clientId
-     * propio; nunca duplica un registro ya existente en Room.
+     * Fusiona la copia remota con Room usando `updatedAt` como criterio
+     * (last-write-wins). Nunca crea dos filas para el mismo documento porque
+     * el id remoto es la clave primaria local.
      */
-    private suspend fun mergeRemote(remoteItems: List<RemoteReminderDto>): Int {
+    private suspend fun mergeCloud(uid: String, remoteItems: List<CloudReminder>): Int {
         var imported = 0
 
-        for (dto in remoteItems) {
-            val remote = dto.toDomainOrNull() ?: continue
+        for (cloud in remoteItems) {
+            // Defensa adicional: el servidor ya filtra por reglas, pero el
+            // cliente tampoco importa documentos de otra cuenta.
+            if (cloud.ownerUid != uid) continue
 
-            val existing = remote.remoteId?.let { dao.getByRemoteId(it) }
-                ?: dao.getById(remote.id)
-
+            val existing = dao.getById(uid, cloud.id)
             if (existing == null) {
-                dao.upsert(remote.copy(syncState = SyncState.SYNCED).toEntity())
+                dao.upsert(cloud.toDomain().toEntity())
                 imported++
                 continue
             }
 
-            if (existing.isDeleted) {
-                // Una eliminación local pendiente no debe resucitar por un pull.
-                if (existing.remoteId == null && remote.remoteId != null) {
-                    dao.updateSyncInfo(
-                        id = existing.id,
-                        syncState = existing.syncState,
-                        syncError = existing.syncError,
-                        remoteId = remote.remoteId
-                    )
-                }
-                continue
-            }
+            // Una eliminación local pendiente no debe resucitarse con el pull.
+            if (existing.isDeleted) continue
 
             val local = existing.toDomain()
-            val remoteIsNewer = remote.updatedAt >= local.updatedAt
-            val hasLocalPendingChanges =
-                local.syncState == SyncState.PENDING ||
-                    local.syncState == SyncState.ERROR ||
-                    local.syncState == SyncState.SYNCING
+            val hasLocalPendingChanges = local.syncState != SyncState.SYNCED
+            val remoteIsNewer = cloud.updatedAt >= local.updatedAt
 
-            val merged = when {
-                hasLocalPendingChanges && remoteIsNewer ->
-                    remote.copy(id = local.id, syncState = SyncState.SYNCED, syncError = null)
-
-                hasLocalPendingChanges ->
-                    local.copy(remoteId = remote.remoteId ?: local.remoteId)
-
-                remoteIsNewer ->
-                    remote.copy(id = local.id, syncState = SyncState.SYNCED, syncError = null)
-
-                else -> local.copy(remoteId = remote.remoteId ?: local.remoteId)
+            val merged = if (hasLocalPendingChanges && !remoteIsNewer) {
+                // El cambio local es más reciente: se conserva y se enviará.
+                local
+            } else {
+                cloud.toDomain()
             }
 
             if (merged != local) {
@@ -363,99 +419,87 @@ class OfflineFirstReminderRepository(
         return imported
     }
 
-    private suspend fun pushOne(entity: com.example.api1_eliasescalante_pm.data.local.ReminderEntity): PushOutcome {
-        if (entity.isDeleted) {
-            return pushDelete(entity)
-        }
-
-        val local = entity.toDomain()
-        val request = local.toRemoteRequest()
-        val remoteId = entity.remoteId
-
-        if (remoteId == null) {
-            return createRemote(entity, request)
-        }
-
-        return when (val result = remoteDataSource.updateReminder(remoteId, request)) {
-            is ApiResult.Success -> markSynced(entity, result.value.remoteId ?: remoteId)
-
-            is ApiResult.ClientError ->
-                if (result.code == 404) {
-                    // El servidor ya no tiene el registro: se vuelve a crear
-                    // con el mismo clientId para no duplicar localmente.
-                    createRemote(entity, request)
-                } else {
-                    PushOutcome.Failure(result.message)
-                }
-
-            is ApiResult.ServerError -> PushOutcome.Failure(result.message)
-            is ApiResult.Timeout -> PushOutcome.Failure(result.message)
-            is ApiResult.NoConnection -> PushOutcome.NoConnection(result.message)
-            is ApiResult.UnknownError -> PushOutcome.Failure(result.message)
-        }
+    /**
+     * Si otro dispositivo eliminó un documento, el pull deja de devolverlo.
+     * Las filas ya confirmadas que no aparecen en el cloud se eliminan localmente;
+     * las pendientes se respetan porque todavía tienen cambios sin enviar.
+     */
+    private suspend fun removeDeletedRemotely(uid: String, remoteIds: Set<String>) {
+        dao.getSyncedForUser(uid)
+            .filterNot { it.id in remoteIds }
+            .forEach { dao.deleteById(uid, it.id) }
     }
 
-    private suspend fun createRemote(
-        entity: com.example.api1_eliasescalante_pm.data.local.ReminderEntity,
-        request: RemoteReminderRequest
-    ): PushOutcome {
-        return when (val result = remoteDataSource.createReminder(request)) {
-            is ApiResult.Success -> markSynced(entity, result.value.remoteId)
-            is ApiResult.ClientError -> PushOutcome.Failure(result.message)
-            is ApiResult.ServerError -> PushOutcome.Failure(result.message)
-            is ApiResult.Timeout -> PushOutcome.Failure(result.message)
-            is ApiResult.NoConnection -> PushOutcome.NoConnection(result.message)
-            is ApiResult.UnknownError -> PushOutcome.Failure(result.message)
-        }
-    }
-
-    private suspend fun pushDelete(
-        entity: com.example.api1_eliasescalante_pm.data.local.ReminderEntity
-    ): PushOutcome {
-        val remoteId = entity.remoteId
-        if (remoteId == null) {
-            dao.deleteById(entity.id)
-            return PushOutcome.Success
-        }
-
-        return when (val result = remoteDataSource.deleteReminder(remoteId)) {
-            is ApiResult.Success -> {
-                dao.deleteById(entity.id)
-                PushOutcome.Success
-            }
-
-            is ApiResult.ClientError ->
-                if (result.code == 404) {
-                    // Ya no existe en el servidor: se completa el borrado local.
-                    dao.deleteById(entity.id)
-                    PushOutcome.Success
-                } else {
-                    PushOutcome.Failure(result.message)
-                }
-
-            is ApiResult.ServerError -> PushOutcome.Failure(result.message)
-            is ApiResult.Timeout -> PushOutcome.Failure(result.message)
-            is ApiResult.NoConnection -> PushOutcome.NoConnection(result.message)
-            is ApiResult.UnknownError -> PushOutcome.Failure(result.message)
-        }
-    }
-
-    private suspend fun markSynced(
-        entity: com.example.api1_eliasescalante_pm.data.local.ReminderEntity,
-        remoteId: Long?
-    ): PushOutcome {
-        if (remoteId == null) {
+    private suspend fun pushOne(uid: String, entity: ReminderEntity): PushOutcome {
+        if (entity.ownerUid != uid) {
             return PushOutcome.Failure(
-                "El servicio confirmó la operación pero no devolvió un identificador remoto."
+                "Se detectó un registro de otra cuenta en la cola local."
             )
         }
+
+        if (entity.isDeleted) {
+            return when (val result = cloudDataSource.delete(uid, entity.id)) {
+                is CloudResult.Success -> {
+                    dao.deleteById(uid, entity.id)
+                    PushOutcome.Success
+                }
+                is CloudResult.Unauthenticated -> PushOutcome.Unauthorized(result.message)
+                is CloudResult.PermissionDenied -> PushOutcome.Failure(result.message)
+                is CloudResult.Unavailable -> PushOutcome.NoConnection(result.message)
+                is CloudResult.Failure -> PushOutcome.Failure(result.message)
+            }
+        }
+
+        val cloud = entity.toDomain().toCloud()
+        return when (val result = cloudDataSource.upsert(uid, cloud)) {
+            is CloudResult.Success -> {
+                dao.updateSyncInfo(
+                    ownerUid = uid,
+                    id = entity.id,
+                    syncState = SyncState.SYNCED.storageValue,
+                    syncError = null,
+                    syncedAt = clock()
+                )
+                PushOutcome.Success
+            }
+            is CloudResult.Unauthenticated -> PushOutcome.Unauthorized(result.message)
+            is CloudResult.PermissionDenied -> PushOutcome.Failure(result.message)
+            is CloudResult.Unavailable -> PushOutcome.NoConnection(result.message)
+            is CloudResult.Failure -> PushOutcome.Failure(result.message)
+        }
+    }
+
+    private suspend fun markError(uid: String, id: String, message: String) {
         dao.updateSyncInfo(
-            id = entity.id,
-            syncState = SyncState.SYNCED.storageValue,
-            syncError = null,
-            remoteId = remoteId
+            ownerUid = uid,
+            id = id,
+            syncState = SyncState.ERROR.storageValue,
+            syncError = message,
+            syncedAt = null
         )
-        return PushOutcome.Success
+    }
+
+    private fun requireUid(): String = sessionProvider.currentUid()
+        ?: throw IllegalStateException(
+            "No hay una sesión iniciada. Iniciá sesión para administrar recordatorios."
+        )
+
+    private fun AuthState.signedInUid(): String? =
+        (this as? AuthState.SignedIn)?.user?.uid
+
+    private fun applyPreferences(
+        entities: List<ReminderEntity>,
+        preferences: UserPreferences
+    ): List<Reminder> {
+        return entities.asSequence()
+            .map { it.toDomain() }
+            .filter { preferences.showCompleted || it.status != ReminderStatus.COMPLETED }
+            .filter {
+                preferences.priorityFilter == PriorityFilter.ALL ||
+                    it.priority.storageValue == preferences.priorityFilter.storageValue
+            }
+            .sortedWith(comparatorFor(preferences))
+            .toList()
     }
 
     private fun comparatorFor(preferences: UserPreferences): Comparator<Reminder> {
@@ -488,5 +532,6 @@ class OfflineFirstReminderRepository(
         data object Success : PushOutcome
         data class Failure(val message: String) : PushOutcome
         data class NoConnection(val message: String) : PushOutcome
+        data class Unauthorized(val message: String) : PushOutcome
     }
 }

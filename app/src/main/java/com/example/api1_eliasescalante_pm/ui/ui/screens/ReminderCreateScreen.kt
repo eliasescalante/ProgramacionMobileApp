@@ -44,7 +44,10 @@ fun ReminderCreateScreen(
     onCancelar: () -> Unit
 ) {
     val viewModel: ReminderCreateViewModel = viewModel(
-        factory = ReminderViewModelFactory(AppContainer.reminderRepository)
+        factory = ReminderViewModelFactory(
+            repository = AppContainer.reminderRepository,
+            authRepository = AppContainer.authRepository
+        )
     )
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 

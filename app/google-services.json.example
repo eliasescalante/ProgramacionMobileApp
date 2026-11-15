@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Plantilla de referencia. NO reemplaza al archivo real.
+#
+# 1. En la consola de Firebase: Descripción general > Agregar app > Android.
+# 2. Package: com.example.api1_eliasescalante_pm
+# 3. Descargar google-services.json y guardarlo en app/google-services.json
+#
+# El archivo real contiene el project_id, el app_id y la API key del proyecto
+# de la cátedra. Sin él, el plugin com.google.gms.google-services no se aplica
+# y la aplicación muestra la pantalla "Falta configurar Firebase".
+{
+  "project_info": {
+    "project_number": "7143315726",
+    "project_id": "recordatorios-pm",
+    "storage_bucket": "recordatorios-pm.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:000000000000:android:0000000000000000000000",
+        "android_client_info": {
+          "package_name": "com.example.api1_eliasescalante_pm"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "REEMPLAZAR_POR_LA_API_KEY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

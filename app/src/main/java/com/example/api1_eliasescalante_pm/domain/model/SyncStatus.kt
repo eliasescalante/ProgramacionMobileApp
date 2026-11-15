@@ -2,7 +2,7 @@ package com.example.api1_eliasescalante_pm.domain.model
 
 /**
  * Estado observable del proceso de sincronización. La interfaz reacciona a
- * este estado, pero nunca interpreta códigos HTTP ni excepciones de red.
+ * este estado, pero nunca interpreta códigos de Firestore ni excepciones.
  */
 sealed interface SyncStatus {
 
@@ -18,6 +18,11 @@ sealed interface SyncStatus {
 
     data class Offline(
         val message: String = "Sin conexión. Los datos locales siguen disponibles."
+    ) : SyncStatus
+
+    /** No hay una cuenta autenticada: no se puede sincronizar. */
+    data class NoSession(
+        val message: String = "Iniciá sesión para sincronizar con la nube."
     ) : SyncStatus
 
     data class Error(

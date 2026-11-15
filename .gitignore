@@ -15,3 +15,20 @@ build/
 .externalNativeBuild
 .cxx
 local.properties
+
+# ---------------------------------------------------------------------------
+# Credenciales y datos de entorno (no versionar)
+# ---------------------------------------------------------------------------
+# google-services.json identifica el proyecto Firebase de la cátedra. Se
+# distribuye aparte y se coloca manualmente en app/. Ver FIREBASE_SETUP.md.
+/app/google-services.json
+
+# Firma release: el keystore y sus contraseñas viven fuera del repositorio.
+# Ver RELEASE_SIGNING.md.
+keystore.properties
+*.jks
+*.keystore
+release/
+
+# Archivos que genera cada entorno de desarrollo.
+local.properties

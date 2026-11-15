@@ -1,0 +1,72 @@
+rules_version = '2';
+
+// ---------------------------------------------------------------------------
+// Reglas de Cloud Firestore para la aplicación de recordatorios.
+//
+// Estructura:
+//   users/{uid}/reminders/{reminderId}
+//
+// Principios:
+//  1. Solo una cuenta autenticada puede leer o escribir su propio árbol.
+//  2. La ruta y el contenido deben coincidir: `ownerUid` y `id` se comparan
+//     con `request.auth.uid` y con el id del documento. Un cliente no puede
+//     "mudar" un documento a otra cuenta.
+//  3. El resto de la base queda denegado por defecto (Firestore deniega todo
+//     lo que ninguna regla permite).
+//  4. Las reglas son la autorización real. Ocultar botones en la interfaz no
+//     protege nada: un cliente REST con el token de otra cuenta falla aquí.
+// ---------------------------------------------------------------------------
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // El uid solicitado debe ser el de la sesión.
+    function owns(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    // Valida estructura y tipos del documento de recordatorio.
+    function validReminder(uid, reminderId) {
+      let data = request.resource.data;
+      return data.ownerUid == uid
+        && data.id == reminderId
+        && data.title is string
+        && data.title.size() > 0
+        && data.title.size() <= 120
+        && data.createdAt is int
+        && data.updatedAt is int
+        && data.updatedAt >= data.createdAt
+        && data.status in ['PENDING', 'IN_PROGRESS', 'COMPLETED']
+        && data.priority in ['HIGH', 'MEDIUM', 'LOW']
+        && data.category in ['WORK', 'PERSONAL', 'HEALTH', 'OTHER'];
+    }
+
+    match /users/{uid} {
+
+      // El documento del usuario no se usa; se niega explícitamente.
+      allow read, write: if false;
+
+      match /reminders/{reminderId} {
+
+        // Lectura: únicamente el dueño del árbol.
+        allow read: if owns(uid);
+
+        // Alta: debe ser el dueño y el cuerpo debe ser coherente con la ruta.
+        allow create: if owns(uid) && validReminder(uid, reminderId);
+
+        // Modificación: además, no se puede cambiar la fecha de creación ni
+        // apropiarse del documento.
+        allow update: if owns(uid)
+          && validReminder(uid, reminderId)
+          && request.resource.data.createdAt == resource.data.createdAt;
+
+        // Borrado: únicamente el dueño. Un documento inexistente no falla.
+        allow delete: if owns(uid);
+      }
+    }
+  }
+}

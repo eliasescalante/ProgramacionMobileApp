@@ -1,5 +1,11 @@
 # Informe técnico — Actividad 3
 
+> **Documento histórico.** Describe la versión 3.0 (Retrofit/JSONPlaceholder).
+> La versión entregada es la 4.0 con Firebase Authentication y Cloud Firestore;
+> el informe vigente es [`INFORME_ACTIVIDAD4.txt`](INFORME_ACTIVIDAD4.txt) y la
+> guía rápida es [`README.md`](README.md).
+
+
 ## Recordatorios Contextuales con persistencia local-first y sincronización
 
 **Proyecto:** `API1ELIASESCALANTEPM`

@@ -14,8 +14,9 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.api1_eliasescalante_pm.domain.model.ThemeMode
 import com.example.api1_eliasescalante_pm.domain.model.UserPreferences
-import com.example.api1_eliasescalante_pm.navigation.ReminderNavHost
+import com.example.api1_eliasescalante_pm.navigation.AppRoot
 import com.example.api1_eliasescalante_pm.ui.ui.API1ELIASESCALANTEPMTheme
+import com.example.api1_eliasescalante_pm.ui.ui.screens.ConfigurationErrorScreen
 
 class MainActivity : ComponentActivity() {
 
@@ -24,19 +25,32 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         setContent {
-            // El tema se lee de DataStore: la preferencia sobrevive al cierre
-            // de la aplicación y también se aplica en el primer frame.
-            val preferences by AppContainer.reminderRepository.preferences
-                .collectAsStateWithLifecycle(initialValue = UserPreferences())
+            val configurationError = AppContainer.configurationError
 
-            API1ELIASESCALANTEPMTheme(
-                darkTheme = preferences.themeMode.toDarkTheme()
-            ) {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
+            if (configurationError != null) {
+                API1ELIASESCALANTEPMTheme(darkTheme = isSystemInDarkTheme()) {
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background
+                    ) {
+                        ConfigurationErrorScreen(message = configurationError)
+                    }
+                }
+            } else {
+                // El tema se lee de DataStore: la preferencia sobrevive al
+                // cierre de la aplicación y se aplica en el primer frame.
+                val preferences by AppContainer.reminderRepository.preferences
+                    .collectAsStateWithLifecycle(initialValue = UserPreferences())
+
+                API1ELIASESCALANTEPMTheme(
+                    darkTheme = preferences.themeMode.toDarkTheme()
                 ) {
-                    ReminderNavHost()
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background
+                    ) {
+                        AppRoot()
+                    }
                 }
             }
         }

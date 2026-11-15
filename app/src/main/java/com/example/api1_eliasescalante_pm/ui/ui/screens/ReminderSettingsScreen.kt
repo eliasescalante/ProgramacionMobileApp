@@ -35,7 +35,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.api1_eliasescalante_pm.AppContainer
-import com.example.api1_eliasescalante_pm.BuildConfig
 import com.example.api1_eliasescalante_pm.domain.model.PriorityFilter
 import com.example.api1_eliasescalante_pm.domain.model.ReminderSortOrder
 import com.example.api1_eliasescalante_pm.domain.model.ThemeMode
@@ -49,17 +48,23 @@ fun ReminderSettingsScreen(
     onVolver: () -> Unit
 ) {
     val viewModel: ReminderSettingsViewModel = viewModel(
-        factory = ReminderViewModelFactory(AppContainer.reminderRepository)
+        factory = ReminderViewModelFactory(
+            repository = AppContainer.reminderRepository,
+            authRepository = AppContainer.authRepository
+        )
     )
     val preferences by viewModel.preferences.collectAsStateWithLifecycle()
+    val account by viewModel.account.collectAsStateWithLifecycle()
+    val pendingCount by viewModel.pendingCount.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
 
     var showClearDialog by remember { mutableStateOf(false) }
+    var showLogoutDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Preferencias y datos") },
+                title = { Text("Cuenta y preferencias") },
                 navigationIcon = {
                     TextButton(onClick = onVolver) { Text("Volver") }
                 }
@@ -75,13 +80,6 @@ fun ReminderSettingsScreen(
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text(
-                text = "Estas opciones se guardan en DataStore y se conservan " +
-                    "aunque cierres la aplicación por completo.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
             message?.let { text ->
                 Surface(
                     color = MaterialTheme.colorScheme.secondaryContainer,
@@ -103,6 +101,79 @@ fun ReminderSettingsScreen(
                 }
             }
 
+            // -----------------------------------------------------------------
+            // Sesión
+            // -----------------------------------------------------------------
+            SectionTitle("Cuenta")
+
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = account?.email ?: "Cuenta sin correo",
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        text = "Identificador de la cuenta: " +
+                            (account?.shortUid ?: "no disponible"),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = when {
+                            pendingCount == 0 ->
+                                "Todos los cambios están sincronizados."
+
+                            pendingCount == 1 ->
+                                "1 cambio esperando sincronización."
+
+                            else ->
+                                "$pendingCount cambios esperando sincronización."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (pendingCount == 0) {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        } else {
+                            MaterialTheme.colorScheme.tertiary
+                        }
+                    )
+                }
+            }
+
+            Text(
+                text = "La sesión la administra Firebase Authentication. La " +
+                    "aplicación solo conserva el identificador para separar los " +
+                    "datos de cada cuenta: no guarda contraseñas ni tokens " +
+                    "propios en DataStore.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Button(
+                onClick = viewModel::syncNow,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Sincronizar ahora")
+            }
+
+            OutlinedButton(
+                onClick = { showLogoutDialog = true },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Cerrar sesión")
+            }
+
+            HorizontalDivider()
+
+            // -----------------------------------------------------------------
+            // Preferencias
+            // -----------------------------------------------------------------
             SectionTitle("Apariencia")
             Text("Tema", style = MaterialTheme.typography.titleSmall)
             ThemeMode.entries.forEach { mode ->
@@ -172,30 +243,23 @@ fun ReminderSettingsScreen(
 
             HorizontalDivider()
 
-            SectionTitle("Servicio remoto")
+            // -----------------------------------------------------------------
+            // Datos locales
+            // -----------------------------------------------------------------
+            SectionTitle("Datos en este dispositivo")
             Text(
-                text = "URL base configurada:\n${BuildConfig.REMOTE_BASE_URL}",
-                style = MaterialTheme.typography.bodySmall
-            )
-            Text(
-                text = "Se puede cambiar con -PREMOTE_BASE_URL=... al compilar " +
-                    "o desde gradle.properties. Ver remote.properties.example.",
+                text = "Room (reminders.db) guarda únicamente los " +
+                    "recordatorios de la cuenta con sesión activa. Firestore " +
+                    "conserva la copia en la nube. DataStore (user_preferences) " +
+                    "guarda el tema, el orden y los filtros; no contiene datos " +
+                    "de negocio.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Button(
-                onClick = viewModel::syncNow,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Sincronizar ahora")
-            }
-
-            HorizontalDivider()
-
-            SectionTitle("Datos locales")
             Text(
-                text = "Los recordatorios están en Room (reminders.db). Las " +
-                    "preferencias están en DataStore (user_preferences).",
+                text = "Al cerrar sesión se borra de Room la copia local de la " +
+                    "cuenta. Las preferencias de apariencia se conservan porque " +
+                    "no pertenecen a ninguna cuenta.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -211,29 +275,71 @@ fun ReminderSettingsScreen(
                 onClick = { showClearDialog = true },
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("Borrar todos los recordatorios locales")
+                Text("Borrar la copia local de mis recordatorios")
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "Prueba sugerida: cambiá el tema o el orden, cerrá la " +
-                    "aplicación desde Recientes y volvé a abrirla. La " +
-                    "configuración debe mantenerse.",
+                text = "Los botones y secciones solo muestran lo que la sesión " +
+                    "permite; la autorización real la aplican el filtro por uid " +
+                    "en Room y las reglas de Firestore.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
 
+    if (showLogoutDialog) {
+        AlertDialog(
+            onDismissRequest = { showLogoutDialog = false },
+            title = { Text("Cerrar sesión") },
+            text = {
+                Text(
+                    buildString {
+                        append(
+                            "Se borrará de este dispositivo la copia local de " +
+                                "tus recordatorios para que otra cuenta no pueda " +
+                                "verla."
+                        )
+                        if (pendingCount > 0) {
+                            append(
+                                "\n\nHay $pendingCount cambio(s) sin " +
+                                    "sincronizar. Se intentará enviarlos antes de " +
+                                    "cerrar sesión; si no hay red, se perderán " +
+                                    "porque la copia local se elimina."
+                            )
+                        }
+                        append(
+                            "\n\nTus datos seguirán en Firestore y volverán a " +
+                                "descargarse al iniciar sesión con la misma cuenta."
+                        )
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showLogoutDialog = false
+                        viewModel.logout()
+                    }
+                ) { Text("Cerrar sesión") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLogoutDialog = false }) { Text("Cancelar") }
+            }
+        )
+    }
+
     if (showClearDialog) {
         AlertDialog(
             onDismissRequest = { showClearDialog = false },
-            title = { Text("Borrar recordatorios") },
+            title = { Text("Borrar copia local") },
             text = {
                 Text(
-                    "Se eliminarán todos los registros de Room. Esta acción no " +
-                        "borra las preferencias de DataStore."
+                    "Se eliminarán los registros de Room de esta cuenta. " +
+                        "Firestore no se modifica: al sincronizar se volverán a " +
+                        "descargar. Las preferencias de DataStore no se tocan."
                 )
             },
             confirmButton = {
