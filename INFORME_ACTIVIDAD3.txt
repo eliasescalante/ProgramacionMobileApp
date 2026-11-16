@@ -1,0 +1,1137 @@
+================================================================================
+INFORME DE LA ACTIVIDAD 3
+Aplicacion de Recordatorios Contextuales con persistencia local y sincronizacion
+================================================================================
+
+Proyecto ........: API1ELIASESCALANTEPM
+Paquete .........: com.example.api1_eliasescalante_pm
+Version .........: 3.0 (versionCode 3)
+Plataforma ......: Android
+minSdk / target .: 24 / 37
+compileSdk ......: 37
+Lenguaje ........: Kotlin + Jetpack Compose
+Fecha ...........: noviembre de 2026
+
+--------------------------------------------------------------------------------
+INDICE
+--------------------------------------------------------------------------------
+1. Resumen ejecutivo
+2. Objetivo y alcance de la consigna
+3. Metodologia de evaluacion
+4. Linea base: el proyecto antes de la Actividad 3
+   4.1 Que existia
+   4.2 Fortalezas de la linea base
+   4.3 Limitaciones frente a la consigna
+5. Evolucion hacia la version 3
+   5.1 Cambios de configuracion y dependencias
+   5.2 Cambios de arquitectura
+   5.3 Archivos principales incorporados
+6. Analisis de la solucion implementada
+   6.1 DataStore frente a Room: diferencias y criterio de uso
+   6.2 Arquitectura de la capa de datos
+   6.3 Enfoque local-first
+   6.4 Operaciones pendientes y estados de sincronizacion
+   6.5 Estrategia para evitar duplicaciones
+   6.6 Servicio Retrofit, OkHttp y tratamiento de errores
+   6.7 Interfaz, preferencias y experiencia offline
+7. Trazabilidad de requisitos
+8. Resultados de las pruebas
+   8.1 Pruebas unitarias ejecutadas
+   8.2 Pruebas instrumentadas de Room
+   8.3 Verificacion de compilacion y del paquete de entrega
+   8.4 Protocolo de prueba manual en dispositivo
+9. Instrucciones para configurar, compilar y ejecutar
+   9.1 Requisitos previos
+   9.2 Configuracion del SDK y del JDK
+   9.3 Configuracion de la URL remota
+   9.4 Compilacion e instalacion
+   9.5 Ejecucion desde Android Studio
+   9.6 Ejecucion de pruebas
+10. Valores configurables y archivo de ejemplo
+11. Limitaciones conocidas y mejoras futuras
+12. Conclusion
+13. Anexo: mapa de archivos y entregables
+
+
+================================================================================
+1. RESUMEN EJECUTIVO
+================================================================================
+
+La Actividad 3 transforma una aplicacion de recordatorios que funcionaba
+unicamente en memoria en una aplicacion con persistencia local real,
+preferencias persistentes, una capa de datos separada y sincronizacion
+controlada con un servicio REST.
+
+Antes de los cambios, la aplicacion cumplia el objetivo visual de listar y crear
+recordatorios, pero la informacion se perdia al cerrar el proceso, no existia
+diferenciacion entre datos locales y remotos, no habia preferencias persistentes
+ni una estrategia offline. Para la consigna, esos puntos eran justamente el
+nucleo de la actividad.
+
+La version 3 incorpora:
+
+  - Room como fuente de verdad de los recordatorios.
+  - DataStore Preferences para las preferencias de la aplicacion.
+  - Un repositorio local-first que escribe primero en Room y sincroniza despues.
+  - Retrofit + OkHttp con URL base configurable y errores clasificados.
+  - Una estrategia de sincronizacion serializada que evita duplicados.
+  - Estados visibles de pendiente, sincronizando, sincronizado y error.
+  - Borrado offline mediante tombstone (isDeleted).
+  - Una interfaz Compose para listado, creacion, detalle editable y ajustes.
+  - 20 pruebas unitarias ejecutadas con 0 fallos.
+  - Documentacion, archivo de configuracion de ejemplo y APK de debug.
+
+El resultado es una tercera version instalable, con funcionamiento offline y
+sincronizacion controlada. La unica limitacion relevante proviene del servicio
+publico de demostracion elegido (JSONPlaceholder), que no persiste los POST y
+devuelve el mismo identificador en cada creacion. La arquitectura queda
+preparada para reemplazarlo por un backend propio sin cambiar la interfaz ni el
+repositorio.
+
+
+================================================================================
+2. OBJETIVO Y ALCANCE DE LA CONSIGNA
+================================================================================
+
+La consigna solicita:
+
+  1. Una carpeta comprimida con el proyecto completo.
+  2. Codigo con configuracion de DataStore y Room, entidades, DAO, base de datos,
+     repositorios, modelos y mapeos, servicio Retrofit y estrategia de
+     sincronizacion.
+  3. Un informe que explique:
+       - La evolucion de la aplicacion.
+       - La diferencia entre preferencias de DataStore y registros de Room.
+       - La arquitectura de la capa de datos.
+       - El enfoque local-first.
+       - El tratamiento de operaciones pendientes.
+       - La estrategia para evitar duplicaciones.
+       - Los resultados de las pruebas.
+  4. Instrucciones claras de configuracion, compilacion y ejecucion.
+  5. Un archivo de ejemplo para valores configurables, sin credenciales ni
+     secretos reales.
+  6. Como producto, una tercera version instalable con persistencia local,
+     preferencias, repositorio, sincronizacion controlada y funcionamiento
+     offline.
+
+Este informe cubre todos esos puntos. El proyecto comprimido y el APK se
+entregan junto con este documento.
+
+
+================================================================================
+3. METODOLOGIA DE EVALUACION
+================================================================================
+
+Para evaluar la evolucion sin mezclar estados, el analisis se divide en dos
+etapas:
+
+  ETAPA A - LINEA BASE
+  Se considera el proyecto tal como estaba antes de la Actividad 3, es decir,
+  sin Room, sin DataStore, sin Retrofit, sin repositorio local-first y sin la
+  estrategia de sincronizacion. Esta etapa permite identificar que aportaba el
+  proyecto y que faltaba.
+
+  ETAPA B - VERSION 3 INTEGRADA
+  Se suman los cambios de la Actividad 3 y se evalua el producto completo:
+  arquitectura, persistencia, sincronizacion, interfaz, pruebas y entregables.
+
+La evaluacion se apoya en:
+
+  - Inspeccion del codigo fuente y de la configuracion de Gradle.
+  - Compilacion real del proyecto.
+  - Ejecucion de pruebas unitarias.
+  - Compilacion de pruebas instrumentadas.
+  - Extraccion y recompilacion del ZIP de entrega en una carpeta limpia.
+  - Revision de la correspondencia entre cada requisito y su implementacion.
+
+
+================================================================================
+4. LINEA BASE: EL PROYECTO ANTES DE LA ACTIVIDAD 3
+================================================================================
+
+4.1 QUE EXISTIA
+--------------------------------------------------------------------------------
+
+La linea base era una aplicacion Android con Jetpack Compose y navegacion entre
+tres destinos:
+
+  - Listado de recordatorios.
+  - Creacion de un recordatorio.
+  - Detalle de un recordatorio.
+
+La pantalla de listado se encontraba en MainActivity y mostraba tarjetas con
+titulo, descripcion, categoria, prioridad, estado y ubicacion/aviso. La creacion
+permitia ingresar titulo, descripcion, categoria y prioridad, con validaciones
+basicas de longitud. El detalle mostraba la informacion del recordatorio.
+
+Los datos se administraban mediante un repositorio en memoria. Los modelos
+incluian etiquetas y colores pensados para la presentacion, y el estado de la
+lista se exponia como un flujo (StateFlow) con estados de carga, vacio, exito y
+error.
+
+La aplicacion tenia una version 1.0 en la configuracion original de Gradle, tema
+fijo y no declaraba permisos de red. Las pruebas existentes eran las plantillas
+generadas por Android Studio.
+
+4.2 FORTALEZAS DE LA LINEA BASE
+--------------------------------------------------------------------------------
+
+  - La interfaz ya estaba resuelta con Compose y una navegacion funcional.
+  - Existia una separacion incipiente entre pantalla, ViewModel y repositorio.
+  - Habia validaciones de formulario y estados de UI.
+  - El proyecto compilaba correctamente antes de los cambios.
+  - El lenguaje visual y la estructura general eran reutilizables.
+
+4.3 LIMITACIONES FRENTE A LA CONSIGNA
+--------------------------------------------------------------------------------
+
+  - PERSISTENCIA: los recordatorios vivian en memoria. Al cerrar el proceso se
+    perdian por completo. No existia Room ni ninguna base de datos.
+  - PREFERENCIAS: no habia DataStore ni SharedPreferences. El tema era fijo y no
+    se conservaba ninguna eleccion del usuario.
+  - CAPA DE DATOS: no habia entidades, DAO, base de datos, DTO ni mapeos. El
+    modelo de presentacion y el repositorio estaban acoplados.
+  - SINCRONIZACION: no existia servicio remoto ni estrategia offline. No habia
+    estados pendiente/confirmado/error.
+  - RED: no habia Retrofit, OkHttp, permisos de Internet ni URL configurable.
+  - OPERACIONES OFFLINE: no habia cola de pendientes, reintentos ni tombstones.
+  - DUPLICADOS: no habia un identificador estable para reconciliar creaciones ni
+    un mecanismo de serializacion de sincronizaciones.
+  - PRUEBAS: solo existian las pruebas de plantilla del proyecto.
+  - CONFIGURACION: no habia archivo de ejemplo para valores configurables.
+
+En sintesis: la linea base era una aplicacion correcta como interfaz, pero no
+cumplia el objetivo central de la Actividad 3, que es la persistencia y la
+sincronizacion controlada.
+
+
+================================================================================
+5. EVOLUCION HACIA LA VERSION 3
+================================================================================
+
+5.1 CAMBIOS DE CONFIGURACION Y DEPENDENCIAS
+--------------------------------------------------------------------------------
+
+Se actualizo la configuracion de Gradle para incorporar:
+
+  - KSP (procesador de simbolos) para Room.
+  - Room Runtime, Room KTX y Room Compiler.
+  - DataStore Preferences.
+  - Retrofit y el conversor Gson.
+  - OkHttp y su interceptor de logging.
+  - Gson.
+  - Lifecycle ViewModel Compose y Lifecycle Runtime Compose.
+  - Coroutines Android.
+  - Navigation Compose.
+  - Coroutines Test para pruebas unitarias.
+  - Room Testing para pruebas instrumentadas.
+
+Versiones principales utilizadas:
+
+  - Android Gradle Plugin ....... 9.4.1
+  - Gradle Wrapper .............. 9.6.0
+  - Kotlin ...................... 2.2.10
+  - KSP ......................... 2.2.10-2.0.2
+  - Compose BOM ................. 2026.02.01
+  - Room ........................ 2.8.5
+  - DataStore ................... 1.3.0
+  - Retrofit .................... 2.11.0
+  - OkHttp ...................... 4.12.0
+  - Gson ........................ 2.11.0
+  - Coroutines .................. 1.10.2
+  - Navigation Compose .......... 2.9.6
+
+Se activo BuildConfig para exponer la URL remota y se subio la version a
+3.0 (versionCode 3).
+
+Nota tecnica: AGP 9 usa Kotlin integrado y KSP registra sus fuentes generadas con
+el DSL kotlin.sourceSets. Por eso se agrego en gradle.properties:
+
+  android.disallowKotlinSourceSets=false
+
+Sin esa opcion, la compilacion falla al configurar el proyecto.
+
+5.2 CAMBIOS DE ARQUITECTURA
+--------------------------------------------------------------------------------
+
+La aplicacion paso de un repositorio en memoria a una arquitectura por capas:
+
+  UI Compose
+      |
+      v
+  ViewModel
+      |
+      v
+  ReminderRepository (interfaz)
+      |
+      v
+  OfflineFirstReminderRepository
+      |             |              |
+      v             v              v
+  Room DAO     DataStore      Retrofit/OkHttp
+  (registros)  (preferencias) (servicio remoto)
+
+Se incorporaron:
+
+  - Modelo de dominio independiente de Android.
+  - Entidad de Room y DAO con consultas Flow.
+  - Base de datos Room con instancia unica.
+  - Repositorio de preferencias con DataStore.
+  - Fuente remota con Retrofit y contrato de resultados (ApiResult).
+  - Monitor de conectividad.
+  - Mapeos explicitos entre Entity, DTO y Domain.
+  - Contenedor de dependencias manual e inicializacion en Application.
+  - ViewModels para listado, creacion, detalle y preferencias.
+  - Pantallas y componentes Compose nuevos.
+
+5.3 ARCHIVOS PRINCIPALES INCORPORADOS
+--------------------------------------------------------------------------------
+
+  domain/model/Reminder.kt
+  domain/model/UserPreferences.kt
+  domain/model/SyncStatus.kt
+
+  data/local/ReminderEntity.kt
+  data/local/ReminderDao.kt
+  data/local/AppDatabase.kt
+
+  data/preferences/UserPreferencesRepository.kt
+
+  data/remote/ApiResult.kt
+  data/remote/ReminderApi.kt
+  data/remote/ReminderRemoteDataSource.kt
+  data/remote/RemoteServiceFactory.kt
+  data/remote/dto/RemoteReminderDto.kt
+
+  data/network/NetworkMonitor.kt
+  data/mapper/ReminderMappers.kt
+  data/repository/ReminderRepository.kt
+  data/repository/OfflineFirstReminderRepository.kt
+
+  AppContainer.kt
+  ReminderApplication.kt
+
+  viewmodel/ReminderListViewModel.kt
+  viewmodel/ReminderCreateViewModel.kt
+  viewmodel/ReminderDetailViewModel.kt
+  viewmodel/ReminderSettingsViewModel.kt
+  viewmodel/ReminderViewModelFactory.kt
+
+  ui/ui/screens/ReminderListScreen.kt
+  ui/ui/screens/ReminderCreateScreen.kt
+  ui/ui/screens/ReminderDetailScreen.kt
+  ui/ui/screens/ReminderSettingsScreen.kt
+  ui/ui/components/ReminderComponents.kt
+  ui/ui/state/ReminderUiState.kt
+  ui/ui/ReminderPresentation.kt
+
+  navigation/ReminderNavHost.kt
+  MainActivity.kt
+
+  app/src/test/... (pruebas unitarias)
+  app/src/androidTest/... (pruebas instrumentadas de Room)
+  remote.properties.example
+  README.md
+  INFORME_TECNICO.md
+
+
+================================================================================
+6. ANALISIS DE LA SOLUCION IMPLEMENTADA
+================================================================================
+
+6.1 DATASTORE FRENTE A ROOM: DIFERENCIAS Y CRITERIO DE USO
+--------------------------------------------------------------------------------
+
+Aunque ambos persisten datos en el dispositivo, resuelven problemas distintos.
+
+  +----------------------+------------------------------------+----------------------------------+
+  | Criterio             | DataStore                          | Room                             |
+  +----------------------+------------------------------------+----------------------------------+
+  | Que guarda           | Preferencias y configuracion       | Registros estructurados          |
+  | Volumen tipico       | Pocas claves                       | Muchas filas                     |
+  | Estructura           | Clave-valor tipada                 | Tablas, columnas e indices       |
+  | Consultas            | Lectura directa por clave          | Consultas SQL, filtros, orden    |
+  | Reactividad          | Flow de Preferences                | Flow de entidades y consultas    |
+  | Transacciones        | Edicion atomica de claves          | Transacciones y operaciones DAO  |
+  | Migraciones          | Simple, por claves                 | Versionado de esquema            |
+  | Uso en este proyecto | Tema, mostrar completados, orden,  | Recordatorios, estado de sync,   |
+  |                      | filtro de prioridad                | tombstones, fechas               |
+  +----------------------+------------------------------------+----------------------------------+
+
+Por que DataStore para las preferencias:
+
+  - Son pocos valores y se acceden por clave.
+  - No requieren consultas relacionales.
+  - DataStore ofrece escritura atomica y un Flow observable.
+  - Evita crear una tabla para cuatro valores de configuracion.
+
+Por que Room para los recordatorios:
+
+  - Son registros con identidad, relaciones con estados y necesidad de filtrar y
+    ordenar.
+  - Room permite consultas SQL y observar cambios con Flow.
+  - Permite indices para acelerar filtros por estado, prioridad y sincronizacion.
+  - Es la fuente de verdad adecuada para operaciones CRUD y para la cola de
+    pendientes.
+
+Preferencias implementadas en DataStore:
+
+  - theme_mode: SYSTEM, LIGHT o DARK. Predeterminado: SYSTEM.
+  - show_completed: booleano. Predeterminado: true.
+  - sort_order: DATE_DESC, DATE_ASC, PRIORITY_DESC o TITLE_ASC.
+    Predeterminado: DATE_DESC.
+  - priority_filter: ALL, HIGH, MEDIUM o LOW. Predeterminado: ALL.
+
+Garantias de la implementacion:
+
+  - Instancia unica por proceso mediante el delegate preferencesDataStore.
+  - Claves tipadas con stringPreferencesKey y booleanPreferencesKey.
+  - Valores por defecto ante claves ausentes o valores desconocidos.
+  - Recuperacion ante archivo corrupto con ReplaceFileCorruptionHandler.
+  - Recuperacion ante errores de lectura IOException emitiendo preferencias
+    vacias.
+  - Setters suspendidos que escriben con dataStore.edit.
+  - Contrato UserPreferencesDataSource para poder probar el repositorio con un
+    doble en memoria.
+
+6.2 ARQUITECTURA DE LA CAPA DE DATOS
+--------------------------------------------------------------------------------
+
+La capa de datos se organizo en responsabilidades pequenas:
+
+  domain/model
+    Modelo Reminder, enums de categoria, prioridad, estado y sync, borrador de
+    recordatorio, preferencias y estado de sincronizacion. No depende de Room,
+    Retrofit ni Compose.
+
+  data/local
+    ReminderEntity: representacion exacta de la tabla.
+    ReminderDao: operaciones y consultas.
+    AppDatabase: instancia unica de Room.
+
+  data/preferences
+    UserPreferencesRepository: lectura y escritura de DataStore.
+    UserPreferencesDataSource: contrato usado por el repositorio principal.
+
+  data/remote
+    ReminderApi: contrato Retrofit.
+    RemoteReminderDto y RemoteReminderRequest: contrato remoto.
+    ApiResult: resultado tipado de una llamada.
+    ReminderRemoteDataSource: interfaz y adaptador Retrofit.
+    RemoteServiceFactory: construccion de Retrofit y OkHttp.
+
+  data/network
+    NetworkMonitor: consulta y flujo de conectividad.
+
+  data/mapper
+    Funciones explicitas Entity <-> Domain, Domain -> Request y Response ->
+    Domain. Tambien codifican y decodifican metadatos dentro del campo body.
+
+  data/repository
+    ReminderRepository: contrato que consume la presentacion.
+    OfflineFirstReminderRepository: implementacion con Room como fuente de
+    verdad y sincronizacion.
+
+  viewmodel
+    Estado de UI y acciones. No conoce Room, Retrofit ni DTO.
+
+  ui/ui
+    Pantallas, componentes, tema y funciones de presentacion.
+
+  AppContainer
+    Construye una sola instancia de base de datos, DataStore, Retrofit y
+    repositorio. ReminderApplication lo inicializa antes de que exista la UI.
+
+Ventajas de esta separacion:
+
+  - Compose nunca accede al DAO.
+  - Cambiar el backend no obliga a cambiar la UI.
+  - Los DTO no contaminan el dominio.
+  - Las pruebas pueden sustituir la fuente remota o las preferencias.
+  - Los errores de bajo nivel se traducen antes de llegar a la interfaz.
+
+6.3 ENFOQUE LOCAL-FIRST
+--------------------------------------------------------------------------------
+
+El principio es: primero el dispositivo, despues la red.
+
+FLUJO DE ESCRITURA
+  1. El usuario crea, edita, cambia el estado o elimina un recordatorio.
+  2. El ViewModel llama al repositorio.
+  3. El repositorio escribe en Room con syncState = PENDING.
+  4. La UI se actualiza de inmediato porque observa los Flow de Room.
+  5. Se dispara la sincronizacion en segundo plano.
+
+FLUJO DE LECTURA
+  1. La UI observa el Flow del repositorio.
+  2. El repositorio combina los recordatorios de Room con las preferencias de
+     DataStore.
+  3. Aplica el filtro de completados, el filtro de prioridad y el orden elegido.
+  4. Entrega el resultado a Compose.
+
+FLUJO DE SINCRONIZACION
+  1. Si no hay red, se publica el estado Offline y no se toca la base.
+  2. Se hace primero un pull (GET) para reconciliar cambios remotos.
+  3. Se hace despues un push de las filas PENDING o ERROR.
+  4. Cada exito pasa la fila a SYNCED.
+  5. Cada fallo la pasa a ERROR y guarda el mensaje.
+
+Disparadores de sincronizacion:
+
+  - Arranque de la aplicacion (primer valor del flujo de red).
+  - Retorno de la conectividad.
+  - Boton manual del listado.
+  - Boton manual de ajustes.
+  - Despues de cada escritura local.
+
+Todos los disparadores pasan por el mismo Mutex, por lo que no compiten entre si.
+
+Consecuencia practica: si el usuario esta sin red, puede crear, editar y borrar.
+Los datos quedan en Room y la interfaz sigue funcionando. Al recuperar la red,
+los cambios pendientes se envian.
+
+6.4 OPERACIONES PENDIENTES Y ESTADOS DE SINCRONIZACION
+--------------------------------------------------------------------------------
+
+Cada registro de Room tiene un campo syncState y un campo syncError.
+
+  +-----------+--------------------------------------------------------------+
+  | Estado    | Significado                                                  |
+  +-----------+--------------------------------------------------------------+
+  | PENDING   | Existe en Room y todavia no fue confirmado por el servicio.  |
+  | SYNCING   | Se esta enviando en este momento.                            |
+  | SYNCED    | El servicio confirmo la operacion.                           |
+  | ERROR     | El ultimo intento fallo; se reintentara en la proxima sync. |
+  +-----------+--------------------------------------------------------------+
+
+Transiciones principales:
+
+  PENDING -> SYNCING -> SYNCED
+  PENDING -> SYNCING -> ERROR
+  ERROR   -> SYNCING -> SYNCED
+  ERROR   -> SYNCING -> ERROR
+
+El estado se persiste en Room, no solo en memoria. Esto significa que si la
+aplicacion se cierra con cambios pendientes, al reabrirse siguen pendientes y se
+reintentan.
+
+Borrado offline:
+
+  - Si el registro nunca tuvo remoteId, se elimina fisicamente de Room.
+  - Si ya tenia remoteId, se marca isDeleted = 1 y se oculta de la UI.
+  - En la siguiente sincronizacion se envia DELETE.
+  - Si el servicio responde 404, se considera completado y se borra localmente.
+  - Un pull no resucita un registro marcado como eliminado.
+
+Contador de pendientes:
+
+  El DAO expone observePendingCount, que cuenta filas no eliminadas en estado
+  PENDING o ERROR. La UI lo usa para mostrar cuantos cambios faltan enviar.
+
+Visibilidad:
+
+  - Banner superior con estado: sincronizando, exito, offline o error.
+  - Tarjeta de cada recordatorio con su estado de sync.
+  - Detalle con el ultimo error de sincronizacion, si existe.
+  - Contador de cambios pendientes.
+
+6.5 ESTRATEGIA PARA EVITAR DUPLICACIONES
+--------------------------------------------------------------------------------
+
+La duplicacion puede aparecer por tres motivos:
+
+  - Varios disparadores ejecutan la sincronizacion al mismo tiempo.
+  - Se reintenta una creacion cuyo response se perdio.
+  - Un pull vuelve a insertar algo que ya existe localmente.
+
+La solucion combina varias defensas:
+
+  1. SERIALIZACION CON MUTEX
+     syncNow se ejecuta dentro de un Mutex. Si dos eventos coinciden, el segundo
+     espera. Cuando entra, la cola de pendientes ya esta vacia o actualizada,
+     por lo que no reenvia lo confirmado.
+
+  2. SOLO SE ENVIA LO PENDIENTE
+     El push consulta unicamente filas PENDING o ERROR. Una fila SYNCED deja de
+     ser elegible.
+
+  3. PULL ANTES DE PUSH
+     Primero se traen los cambios remotos y se reconcilian. Esto permite detectar
+     una creacion que llego al servidor aunque el response se haya perdido.
+
+  4. CLIENTID ESTABLE
+     Cada recordatorio recibe un UUID local al crearse. Ese clientId viaja en el
+     body y como campo extra del request. El servidor puede usarlo para
+     reconciliar. Si el response se pierde, el pull puede asociar el registro
+     remoto con la fila local correcta.
+
+  5. IDENTIDAD LOCAL COMO CLAVE
+     La clave primaria de Room es el UUID local, no el id remoto. El id remoto
+     es un dato adicional.
+
+  6. REGISTROS AJENOS IGNORADOS
+     Un DTO remoto sin clientId se descarta. Asi no se importan los posts de
+     ejemplo de JSONPlaceholder ni datos de otras aplicaciones.
+
+  7. TOMBSTONES
+     Un registro eliminado localmente no se resucita si el pull lo vuelve a
+     traer.
+
+  8. RECREACION ANTE 404
+     Si un PUT devuelve 404, se vuelve a crear con el mismo clientId. No se crea
+     una fila local nueva.
+
+  9. FILAS IDENTIFICADAS POR ID
+     La lista de Compose usa key = id. Aunque hubiera una emision repetida, la
+     UI no crea elementos visuales duplicados.
+
+Evidencia automatizada:
+
+  - La prueba "sync pushes a pending reminder once and marks it synced" verifica
+    que un segundo sync no vuelve a crear.
+  - La prueba "concurrent sync triggers never duplicate the remote creation"
+    lanza dos sync simultaneas y comprueba que el servicio recibe una sola
+    creacion y que queda una sola fila.
+  - La prueba de pull con un DTO sin clientId verifica que no se importa nada.
+  - La prueba de 404 al actualizar verifica que se recrea sin duplicar la fila.
+
+6.6 SERVICIO RETROFIT, OKHTTP Y TRATAMIENTO DE ERRORES
+--------------------------------------------------------------------------------
+
+Contrato remoto:
+
+  GET    posts?_limit=50     Lista de recordatorios.
+  POST   posts               Crea un recordatorio.
+  PUT    posts/{id}          Actualiza un recordatorio.
+  DELETE posts/{id}          Elimina un recordatorio.
+
+La URL base se configura sin modificar el codigo. El valor por defecto es:
+
+  https://jsonplaceholder.typicode.com/
+
+La prioridad de configuracion es:
+
+  1. Parametro de Gradle: -PREMOTE_BASE_URL=...
+  2. Clave REMOTE_BASE_URL en local.properties.
+  3. Valor por defecto del build.
+
+La URL se normaliza para terminar en "/". No hay tokens, credenciales ni
+secretos en el codigo ni en el repositorio.
+
+Traduccion de resultados (ApiResult):
+
+  +--------------------------------------+------------------+---------------------+
+  | Situacion                            | Tipo             | Efecto              |
+  +--------------------------------------+------------------+---------------------+
+  | 2xx con cuerpo                       | Success          | Marca SYNCED        |
+  | 2xx sin cuerpo (DELETE)              | Success(Unit)    | Completa el borrado |
+  | 4xx                                  | ClientError      | ERROR               |
+  | 5xx                                  | ServerError      | ERROR, reintentable |
+  | SocketTimeoutException               | Timeout          | ERROR               |
+  | UnknownHost / Connect / Socket / SSL | NoConnection     | Offline             |
+  | Otra IOException                     | NoConnection     | Offline             |
+  | Otro error                           | UnknownError     | ERROR               |
+  +--------------------------------------+------------------+---------------------+
+
+Casos especiales:
+
+  - PUT con 404: se recrea el registro con el mismo clientId.
+  - DELETE con 404: se considera que ya no existe y se borra localmente.
+  - CancellationException: se propaga para no romper la cancelacion de
+    corrutinas.
+  - Respuesta 2xx sin cuerpo en una creacion: se marca error, porque no se puede
+    confirmar el identificador remoto.
+
+OkHttp:
+
+  - Timeout de conexion: 10 segundos.
+  - Timeout de lectura y escritura: 15 segundos.
+  - Reintento de conexion habilitado.
+  - Logging solo en builds debug.
+  - En builds release no se registra trafico.
+
+6.7 INTERFAZ, PREFERENCIAS Y EXPERIENCIA OFFLINE
+--------------------------------------------------------------------------------
+
+Listado:
+
+  - Banner de sincronizacion.
+  - Resumen de preferencias activas.
+  - Tarjetas con titulo, descripcion, categoria, prioridad, estado, fecha,
+    ubicacion y estado de sync.
+  - Acciones Sync y Ajustes.
+  - Boton flotante para crear.
+
+Creacion:
+
+  - Titulo obligatorio de 4 a 80 caracteres.
+  - Descripcion de hasta 200 caracteres.
+  - Categoria y prioridad obligatorias.
+  - Fecha opcional con selector.
+  - Ubicacion o aviso opcional.
+  - Guarda primero en Room y vuelve al listado.
+
+Detalle:
+
+  - Vista completa del recordatorio.
+  - Edicion en linea.
+  - Cambio de estado.
+  - Eliminacion con confirmacion.
+  - Visualizacion del error de sincronizacion y de los identificadores local y
+    remoto.
+
+Ajustes:
+
+  - Tema: sistema, claro u oscuro.
+  - Mostrar u ocultar completados.
+  - Criterio de orden.
+  - Filtro de prioridad.
+  - URL remota configurada.
+  - Sincronizacion manual.
+  - Restablecer preferencias.
+  - Borrar datos locales.
+
+El tema se aplica en el nivel superior de la aplicacion observando DataStore. Por
+eso un cambio de tema se mantiene al cerrar y reabrir la aplicacion.
+
+La interfaz no conoce Retrofit ni Room. Solo observa estado y envia acciones.
+
+
+================================================================================
+7. TRAZABILIDAD DE REQUISITOS
+================================================================================
+
+  +--------------------------------------------+------------------------------------------+---------+
+  | Requisito                                  | Implementacion                           | Estado  |
+  +--------------------------------------------+------------------------------------------+---------+
+  | DataStore con al menos 3 preferencias      | 4 claves: tema, completados, orden,      | Cumple  |
+  |                                            | filtro                                   |         |
+  | Instancia unica de DataStore               | Delegate preferencesDataStore            | Cumple  |
+  | Claves tipadas                             | stringPreferencesKey, booleanPreferences | Cumple  |
+  | Valores por defecto                        | toUserPreferences + fromStorage          | Cumple  |
+  | Recuperacion ante error/corrupcion         | catch IOException + ReplaceFileHandler   | Cumple  |
+  | Setters suspendidos                        | dataStore.edit en funciones suspend      | Cumple  |
+  | Room con id estable y campos               | ReminderEntity con UUID y columnas       | Cumple  |
+  | DAO insert/update/delete                   | upsert, updateSyncInfo, deleteById       | Cumple  |
+  | Consultas Flow                             | observeVisible, observeByStatus, etc.    | Cumple  |
+  | Busqueda por id                            | observeById y getById                    | Cumple  |
+  | Al menos un filtro                         | Filtros por estado y prioridad           | Cumple  |
+  | Instancia unica de Room                    | AppDatabase.getInstance                  | Cumple  |
+  | Compose no accede al DAO                   | ViewModel + repositorio                  | Cumple  |
+  | Room como fuente de verdad                 | Toda escritura va primero a Room         | Cumple  |
+  | Offline queda PENDING                      | syncState = PENDING                      | Cumple  |
+  | Sync al recuperar red                      | NetworkMonitor.isOnlineFlow              | Cumple  |
+  | Separacion DTO/Entity/Domain               | Paquetes y mappers explicitos            | Cumple  |
+  | Retrofit + OkHttp                          | ReminderApi + RemoteServiceFactory       | Cumple  |
+  | URL base configurable                      | BuildConfig + local.properties + -P      | Cumple  |
+  | Operaciones suspendidas                    | Funciones suspend en la API              | Cumple  |
+  | Distinguir 4xx/5xx/timeout/sin conexion    | ApiResult                                | Cumple  |
+  | Sin secretos                               | No hay tokens ni credenciales            | Cumple  |
+  | Archivo de ejemplo                         | remote.properties.example                | Cumple  |
+  | Evitar duplicados                          | Mutex, clientId, pull/push, tombstones   | Cumple  |
+  | Estado visible                             | Banner, tarjeta, detalle, contador       | Cumple  |
+  | UI funcional                               | Listado, creacion, detalle, ajustes      | Cumple  |
+  | Proyecto comprimido                        | ZIP de entrega                           | Cumple  |
+  | Informe tecnico                            | Este documento + INFORME_TECNICO.md      | Cumple  |
+  | Resultados de pruebas                      | 20 pruebas unitarias, 0 fallos           | Cumple  |
+  | Instrucciones de compilacion y ejecucion   | Seccion 9                                | Cumple  |
+  +--------------------------------------------+------------------------------------------+---------+
+
+
+================================================================================
+8. RESULTADOS DE LAS PRUEBAS
+================================================================================
+
+8.1 PRUEBAS UNITARIAS EJECUTADAS
+--------------------------------------------------------------------------------
+
+Comando:
+
+  .\gradlew.bat :app:testDebugUnitTest --console=plain
+
+Resultado: 20 pruebas, 0 fallos.
+
+  +----------------------------------------------+--------+--------------------------------------+
+  | Clase                                        | Total  | Cobertura                            |
+  +----------------------------------------------+--------+--------------------------------------+
+  | ReminderMappersTest                          | 7      | Entity <-> Domain, enums invalidos,  |
+  |                                              |        | metadatos del body, DTO sin clientId,|
+  |                                              |        | clientId en el request               |
+  | UserPreferencesMappingTest                   | 4      | Defaults, valores validos, valores   |
+  |                                              |        | invalidos, claves desconocidas       |
+  | OfflineFirstReminderRepositoryTest           | 8      | Offline, push unico, sync concurrente|
+  |                                              |        | 5xx y recuperacion, pull ajeno, 404, |
+  |                                              |        | tombstone, filtro de completados     |
+  | ExampleUnitTest                              | 1      | Plantilla del proyecto               |
+  +----------------------------------------------+--------+--------------------------------------+
+
+Detalle de las pruebas del repositorio:
+
+  1. Creacion offline queda en Room como PENDING.
+  2. Un pendiente se envia una sola vez y pasa a SYNCED.
+  3. Dos sincronizaciones concurrentes no duplican la creacion remota.
+  4. Un error 5xx marca ERROR y una sync posterior recupera.
+  5. El pull ignora registros remotos sin clientId.
+  6. Un 404 al actualizar recrea el registro sin duplicar la fila local.
+  7. El borrado de una fila sincronizada deja tombstone hasta el DELETE.
+  8. Los completados se filtran segun las preferencias.
+
+8.2 PRUEBAS INSTRUMENTADAS DE ROOM
+--------------------------------------------------------------------------------
+
+Archivo:
+
+  app/src/androidTest/java/com/example/api1_eliasescalante_pm/data/local/
+  ReminderDaoTest.kt
+
+Contiene 4 pruebas sobre una base Room en memoria:
+
+  1. Insercion y lectura por id.
+  2. Flow visible oculta tombstones y filtra por prioridad.
+  3. El contador de pendientes incluye PENDING y ERROR.
+  4. updateSyncInfo guarda el remoteId y permite buscarlo.
+
+Estado:
+
+  - COMPILACION: correcta (compileDebugAndroidTestKotlin).
+  - EJECUCION: pendiente de un emulador o dispositivo conectado.
+  - En el entorno de desarrollo utilizado no habia dispositivos disponibles
+    (adb devices vacio), por lo que no se inventan resultados de ejecucion.
+
+Comando para ejecutarlas cuando el emulador este encendido:
+
+  .\gradlew.bat :app:connectedDebugAndroidTest --console=plain
+
+8.3 VERIFICACION DE COMPILACION Y DEL PAQUETE DE ENTREGA
+--------------------------------------------------------------------------------
+
+  - Compilacion debug: BUILD SUCCESSFUL.
+  - Pruebas unitarias: 20 / 20.
+  - Compilacion de pruebas instrumentadas: correcta.
+  - APK debug generado: app/build/outputs/apk/debug/app-debug.apk.
+  - Tamano aproximado del APK: 13,9 MB.
+  - ZIP de entrega extraido en una carpeta limpia y compilado desde cero:
+    BUILD SUCCESSFUL y 20 / 20 pruebas.
+  - El ZIP no incluye build/, .gradle/, .idea/ ni local.properties. Android
+    Studio regenera local.properties con la ruta del SDK.
+
+8.4 PROTOCOLO DE PRUEBA MANUAL EN DISPOSITIVO
+--------------------------------------------------------------------------------
+
+Estas pruebas complementan las automaticas y deben ejecutarse en el emulador o
+dispositivo:
+
+  1. Crear un recordatorio con red: aparece al instante y pasa a Sincronizado.
+  2. Pulsar Sync varias veces: no se duplica el registro.
+  3. Activar modo avion y crear otro: aparece como Pendiente de envio.
+  4. Editar el pendiente sin red: se guarda localmente.
+  5. Desactivar modo avion: el banner sincroniza y pasa a Sincronizado.
+  6. Eliminar un registro sincronizado sin red: desaparece de la lista.
+  7. Volver la red: el borrado remoto se completa.
+  8. Cambiar tema, orden, filtro y mostrar completados: se aplican al instante.
+  9. Cerrar desde Recientes y reabrir: las preferencias se conservan.
+  10. Abrir el detalle: se ven estado, sync, fechas e identificadores.
+
+Verificacion de persistencia:
+
+  - Room: Database Inspector, base reminders.db, tabla reminders.
+  - DataStore: Device Explorer,
+    /data/data/com.example.api1_eliasescalante_pm/files/datastore/
+    user_preferences.preferences_pb.
+  - Cierre forzado:
+    adb shell am force-stop com.example.api1_eliasescalante_pm
+
+
+================================================================================
+9. INSTRUCCIONES PARA CONFIGURAR, COMPILAR Y EJECUTAR
+================================================================================
+
+9.1 REQUISITOS PREVIOS
+--------------------------------------------------------------------------------
+
+  - Android Studio reciente con JDK incluido (JBR).
+  - Android SDK 37 instalado.
+  - Platform Tools (adb) para instalar en dispositivo o emulador.
+  - Conexion a Internet si se usa el servicio remoto de demostracion.
+
+9.2 CONFIGURACION DEL SDK Y DEL JDK
+--------------------------------------------------------------------------------
+
+El archivo local.properties debe contener la ruta del SDK. Android Studio lo crea
+automaticamente. Ejemplo en Windows:
+
+  sdk.dir=C\:\\Users\\<usuario>\\AppData\\Local\\Android\\Sdk
+
+En PowerShell, para compilar desde consola:
+
+  $env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'
+
+El proyecto usa Java 11 como target de compilacion. El JBR de Android Studio
+puede ser mas nuevo; Gradle y Kotlin se encargan de la compatibilidad.
+
+9.3 CONFIGURACION DE LA URL REMOTA
+--------------------------------------------------------------------------------
+
+Opcion 1: local.properties (recomendada para desarrollo)
+
+  Agregar una linea:
+
+  REMOTE_BASE_URL=https://jsonplaceholder.typicode.com/
+
+Opcion 2: parametro de Gradle
+
+  .\gradlew.bat :app:assembleDebug -PREMOTE_BASE_URL=https://mi-backend.example.com/api/
+
+Opcion 3: usar el valor por defecto
+
+  https://jsonplaceholder.typicode.com/
+
+Prioridad: parametro de Gradle > local.properties > valor por defecto.
+
+La URL debe terminar en "/". Si no termina, la aplicacion la normaliza.
+
+9.4 COMPILACION E INSTALACION
+--------------------------------------------------------------------------------
+
+Desde la raiz del proyecto:
+
+  $env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'
+  .\gradlew.bat :app:assembleDebug --console=plain
+
+El APK queda en:
+
+  app\build\outputs\apk\debug\app-debug.apk
+
+Instalacion en un dispositivo o emulador conectado:
+
+  adb install -r app\build\outputs\apk\debug\app-debug.apk
+
+9.5 EJECUCION DESDE ANDROID STUDIO
+--------------------------------------------------------------------------------
+
+  1. Abrir la carpeta raiz del proyecto.
+  2. Esperar la sincronizacion de Gradle.
+  3. Encender un emulador en Device Manager.
+  4. Seleccionar la configuracion app.
+  5. Pulsar Run.
+
+9.6 EJECUCION DE PRUEBAS
+--------------------------------------------------------------------------------
+
+Pruebas unitarias:
+
+  .\gradlew.bat :app:testDebugUnitTest --console=plain
+
+Reporte HTML:
+
+  app\build\reports\tests\testDebugUnitTest\index.html
+
+Pruebas instrumentadas (requieren emulador o dispositivo):
+
+  .\gradlew.bat :app:connectedDebugAndroidTest --console=plain
+
+Reporte HTML:
+
+  app\build\reports\androidTests\connected\index.html
+
+Tambien se pueden ejecutar desde Android Studio con clic derecho sobre
+ReminderDaoTest y Run.
+
+
+================================================================================
+10. VALORES CONFIGURABLES Y ARCHIVO DE EJEMPLO
+================================================================================
+
+Se incluye el archivo:
+
+  remote.properties.example
+
+Contenido conceptual:
+
+  # Copiar a local.properties o usar con -PREMOTE_BASE_URL=...
+  REMOTE_BASE_URL=https://jsonplaceholder.typicode.com/
+
+No contiene credenciales, tokens ni secretos reales.
+
+Contrato minimo esperado por la aplicacion para un backend propio:
+
+  GET    /posts?_limit=50
+  POST   /posts
+  PUT    /posts/{id}
+  DELETE /posts/{id}
+
+Campos reconocidos en la respuesta:
+
+  id, userId, title, body, clientId, description, category, priority, status,
+  dueDate, location, updatedAt.
+
+Si el backend no devuelve los campos extendidos, la aplicacion los recupera del
+bloque de metadatos que escribe dentro de body. Los registros remotos sin
+clientId se ignoran.
+
+IMPORTANTE SOBRE JSONPLACEHOLDER
+
+  JSONPlaceholder es un servicio de demostracion. No persiste los POST de forma
+  consultable y devuelve el mismo id (101) en cada creacion. Por eso:
+
+  - La identidad estable es el UUID local, no el remoteId.
+  - El indice de remoteId en Room no es unico.
+  - La aplicacion no depende de releer lo creado para marcarlo como sincronizado.
+  - Para produccion se recomienda un backend real con ids unicos y soporte de
+    clientId.
+
+
+================================================================================
+11. LIMITACIONES CONOCIDAS Y MEJORAS FUTURAS
+================================================================================
+
+LIMITACIONES
+
+  1. Backend simulado: JSONPlaceholder no persiste los POST ni devuelve ids
+     unicos. La sincronizacion real contra un backend propio no se pudo validar
+     en este entorno.
+  2. Pruebas instrumentadas: compiladas, pero pendientes de ejecucion en un
+     dispositivo.
+  3. Prueba manual end-to-end: pendiente de ejecucion en emulador.
+  4. Paginacion: el pull solicita 50 elementos y no implementa paginas
+     sucesivas.
+  5. Conflictos: se resuelve por updatedAt completo. Si un cambio local y uno
+     remoto coinciden, puede prevalecer uno de los dos; no hay merge por campo.
+  6. Sincronizacion en segundo plano garantizada: se usa corrutinas y un Mutex,
+     no WorkManager. Si el proceso muere, los pendientes se reintentan al volver
+     a abrir la aplicacion, pero no hay un job del sistema con backoff.
+  7. Borrado de una creacion en vuelo: si se elimina un registro sin remoteId
+     mientras el POST esta en curso, el servidor podria quedar con un registro
+     huerfano. Es un caso de borde poco frecuente.
+
+MEJORAS FUTURAS
+
+  1. WorkManager para reintentos con backoff y restricciones de red.
+  2. Backend propio con ids unicos, idempotencia y endpoint de cambios por
+     timestamp.
+  3. Merge por campo y resolucion de conflictos configurable.
+  4. Paginacion y sincronizacion incremental.
+  5. Pruebas instrumentadas de repositorio con Room real y servidor MockWebServer.
+  6. Pruebas de UI con Compose Testing para los flujos principales.
+  7. Cifrado de la base local si se almacenan datos sensibles.
+  8. Autenticacion segura mediante un almacen de credenciales, sin secretos en
+     el codigo.
+
+
+================================================================================
+12. CONCLUSION
+================================================================================
+
+La evaluacion en dos etapas muestra una evolucion clara:
+
+  - La linea base tenia una interfaz funcional, pero carecia de persistencia,
+    preferencias, capa de datos y sincronizacion. No cumplia el nucleo de la
+    Actividad 3.
+  - La version 3 incorpora todos esos elementos con una arquitectura separada y
+    verificable.
+
+Cumplimiento de la consigna:
+
+  - Proyecto comprimido: SI.
+  - DataStore con preferencias persistentes: SI.
+  - Room con entidades, DAO y base de datos: SI.
+  - Repositorio local-first: SI.
+  - Modelos y mapeos separados: SI.
+  - Retrofit y OkHttp con URL configurable: SI.
+  - Estrategia de sincronizacion sin duplicados: SI.
+  - Operaciones pendientes y estados visibles: SI.
+  - Funcionamiento offline: SI.
+  - Informe con evolucion, diferencias DataStore/Room, arquitectura, local-first,
+    pendientes, duplicados y pruebas: SI.
+  - Instrucciones de configuracion, compilacion y ejecucion: SI.
+  - Archivo de ejemplo sin secretos: SI.
+  - Tercera version instalable: SI (APK debug).
+
+Verificacion objetiva realizada:
+
+  - Compilacion debug exitosa.
+  - 20 pruebas unitarias, 0 fallos.
+  - Pruebas instrumentadas compiladas.
+  - ZIP recompilado desde cero con exito y 20 pruebas aprobadas.
+
+Queda pendiente, para completar la evidencia end-to-end, la ejecucion de las
+pruebas instrumentadas y del protocolo manual en un emulador o dispositivo. Esa
+es una limitacion del entorno de verificacion, no de la implementacion. El
+servicio JSONPlaceholder tambien impide validar persistencia remota real, pero
+la arquitectura esta preparada para sustituirlo por un backend propio mediante
+configuracion.
+
+
+================================================================================
+13. ANEXO: MAPA DE ARCHIVOS Y ENTREGABLES
+================================================================================
+
+CODIGO PRINCIPAL
+
+  app/src/main/java/com/example/api1_eliasescalante_pm/
+    MainActivity.kt
+    ReminderApplication.kt
+    AppContainer.kt
+    domain/model/Reminder.kt
+    domain/model/UserPreferences.kt
+    domain/model/SyncStatus.kt
+    data/local/ReminderEntity.kt
+    data/local/ReminderDao.kt
+    data/local/AppDatabase.kt
+    data/preferences/UserPreferencesRepository.kt
+    data/remote/ApiResult.kt
+    data/remote/ReminderApi.kt
+    data/remote/ReminderRemoteDataSource.kt
+    data/remote/RemoteServiceFactory.kt
+    data/remote/dto/RemoteReminderDto.kt
+    data/network/NetworkMonitor.kt
+    data/mapper/ReminderMappers.kt
+    data/repository/ReminderRepository.kt
+    data/repository/OfflineFirstReminderRepository.kt
+    viewmodel/ReminderListViewModel.kt
+    viewmodel/ReminderCreateViewModel.kt
+    viewmodel/ReminderDetailViewModel.kt
+    viewmodel/ReminderSettingsViewModel.kt
+    viewmodel/ReminderViewModelFactory.kt
+    ui/ui/screens/ReminderListScreen.kt
+    ui/ui/screens/ReminderCreateScreen.kt
+    ui/ui/screens/ReminderDetailScreen.kt
+    ui/ui/screens/ReminderSettingsScreen.kt
+    ui/ui/components/ReminderComponents.kt
+    ui/ui/state/ReminderUiState.kt
+    ui/ui/ReminderPresentation.kt
+    navigation/ReminderNavHost.kt
+
+PRUEBAS
+
+  app/src/test/java/.../data/mapper/ReminderMappersTest.kt
+  app/src/test/java/.../data/preferences/UserPreferencesMappingTest.kt
+  app/src/test/java/.../data/repository/OfflineFirstReminderRepositoryTest.kt
+  app/src/test/java/.../ExampleUnitTest.kt
+  app/src/androidTest/java/.../data/local/ReminderDaoTest.kt
+
+CONFIGURACION
+
+  build.gradle.kts
+  settings.gradle.kts
+  gradle.properties
+  gradle/libs.versions.toml
+  gradle/wrapper/gradle-wrapper.properties
+  app/build.gradle.kts
+  app/src/main/AndroidManifest.xml
+  app/src/debug/AndroidManifest.xml
+  remote.properties.example
+
+DOCUMENTACION
+
+  README.md
+  INFORME_TECNICO.md
+  INFORME_ACTIVIDAD3.txt (este archivo)
+
+ENTREGABLES
+
+  API1ELIASESCALANTEPM_Actividad3.zip
+  API1ELIASESCALANTEPM_Actividad3-debug.apk
+
+FIN DEL INFORME
+================================================================================

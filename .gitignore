@@ -21,6 +21,8 @@ local.properties
 # ---------------------------------------------------------------------------
 # google-services.json identifica el proyecto Firebase de la cátedra. Se
 # distribuye aparte y se coloca manualmente en app/. Ver FIREBASE_SETUP.md.
+# La plantilla publica es app/google-services.json.example.
+google-services.json
 /app/google-services.json
 
 # Firma release: el keystore y sus contraseñas viven fuera del repositorio.
@@ -32,3 +34,6 @@ release/
 
 # Archivos que genera cada entorno de desarrollo.
 local.properties
+
+# Logs de compilacion y pruebas.
+*.log
